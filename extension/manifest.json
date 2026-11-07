@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Call Companion - MiniCRM session relay",
+  "version": "0.2.0",
+  "version_name": "0.2.0-beta",
+  "description": "Sends the MiniCRM session cookies of this browser profile to the Call Companion app on this PC (127.0.0.1 only).",
+  "permissions": ["cookies", "alarms"],
+  "host_permissions": [
+    "https://*.minicrm.hu/*",
+    "http://127.0.0.1:48653/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "Call Companion relay" }
+}

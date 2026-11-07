@@ -1,0 +1,6 @@
+{
+  "minicrm": {
+    "mock": false,
+    "debug_dump": false
+  }
+}

@@ -1,0 +1,14 @@
+# Python / build
+__pycache__/
+*.pyc
+.venv/
+venv/
+build/
+dist/
+
+# Local data that must never be committed (customer data, logs, probes)
+*.log
+last_lookup*
+bria_probe.txt
+app.lock
+config.local.json
