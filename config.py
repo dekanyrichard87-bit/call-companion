@@ -71,6 +71,18 @@ DEFAULTS = {
         },
     },
     "ui": {"answered_fade_ms": 2500, "margin_px": 16},
+    # Auto-update from GitHub Releases (updater.py). Only an installed copy (installer.iss) updates itself.
+    "update": {
+        "enabled": True,
+        "repo": "",                     # owner/name; empty = version.GITHUB_REPO
+        "include_prereleases": True,    # 0.x-beta releases are published as GitHub pre-releases
+        "check_interval_h": 6,          # also re-check while running (0 = only at start)
+        "startup_delay_s": 15,          # first check this long after start (keeps the start fast)
+        "asset_regex": "^CallCompanion-Setup-.+\\.exe$",
+        "require_checksum": True,       # refuse an installer without a SHA-256 (digest or .sha256 asset)
+        "github_token": "",             # only for a private repository (read-only token)
+        "timeout_s": 15,
+    },
 }
 
 
@@ -78,6 +90,12 @@ def app_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent
+
+
+def resource_path(rel: str) -> Path:
+    """A file bundled with the app (assets/...): PyInstaller unpacks datas to sys._MEIPASS (the _internal folder)."""
+    base = getattr(sys, "_MEIPASS", None)
+    return (Path(base) if base else Path(__file__).resolve().parent) / rel
 
 
 def data_dir() -> Path:
@@ -97,9 +115,11 @@ def _merge(base: dict, over: dict) -> dict:
 
 
 def load() -> dict:
+    """DEFAULTS <- config.json next to the exe (shipped, replaced by every update)
+                <- %LOCALAPPDATA%\\CallCompanion\\config.json (optional per-user overrides, never touched by updates)"""
     cfg = copy.deepcopy(DEFAULTS)
-    path = app_dir() / "config.json"
-    if path.exists():
-        with open(path, "r", encoding="utf-8") as fh:
-            _merge(cfg, json.load(fh))
+    for path in (app_dir() / "config.json", data_dir() / "config.json"):
+        if path.exists():
+            with open(path, "r", encoding="utf-8-sig") as fh:     # -sig: Notepad may save with a BOM
+                _merge(cfg, json.load(fh))
     return cfg

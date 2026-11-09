@@ -1,6 +1,6 @@
 # Call Companion
 
-**Version 0.4.0-beta** · Windows · Python 3.11+ / PySide6
+**Version 0.5.0-beta** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
 
 Call Companion is a small tray application that watches the **Bria Enterprise** softphone and, the moment a
 call rings, shows a dark, frameless pop-up card in the bottom-right corner of the screen. The card shows the
@@ -13,9 +13,14 @@ icon) shows whether every part is healthy and lists the recent calls.
 It needs **no API keys and no separate MiniCRM login**: it reuses the MiniCRM session of the Chrome profile you
 are already logged in with, delivered by a tiny Chrome extension.
 
+On a user's PC it is a single **`CallCompanion-Setup-<version>.exe`**: no Python, no admin rights, autostart at logon,
+an entry in *Settings > Apps* for uninstalling, and **automatic updates** from this repository's GitHub Releases.
+
 - [How it works](#how-it-works)
 - [What works in this release](#what-works-in-this-release)
 - [Known limits and workarounds](#known-limits-and-workarounds)
+- [Installing on a PC (setup .exe)](#installing-on-a-pc-setup-exe)
+- [Building the installer and publishing updates](#building-the-installer-and-publishing-updates)
 - [Setup and first run](#setup-and-first-run)
 - [Configuration reference](#configuration-reference)
 - [Logs and troubleshooting](#logs-and-troubleshooting)
@@ -102,9 +107,10 @@ Every call is also recorded in the status window's call table (time, number, nam
 | `status_window.py` | `StatusModel` (data) and `StatusWindow` (dark window: health, call table, simulator, re-check) |
 | `extension/` | Chrome MV3 extension: `background.js` relays the MiniCRM session cookies, `content.js` pokes the worker so the sync is fast |
 | `probe.py` | `--probe-bria`: captures what Bria writes during a test call (for adapting the parser) |
-| `config.py` / `config.json` | Defaults and your overrides (deep-merged) |
-| `version.py` | Version number (single source of truth) |
-| `build.ps1`, `callcompanion.spec`, `install.ps1`, `uninstall.ps1` | Packaging, install and autostart scripts |
+| `updater.py` | Auto-update: checks GitHub Releases, downloads and verifies the installer, runs it silently when no call is active |
+| `config.py` / `config.json` | Defaults, the shipped config and optional per-user overrides (deep-merged) |
+| `version.py` | Version number and update repository (single source of truth for the app, the exe and the installer) |
+| `build.ps1`, `callcompanion.spec`, `installer.iss`, `assets/` | Build: PyInstaller exe, Inno Setup installer (autostart, uninstaller), app icon |
 
 ### MiniCRM lookup
 
@@ -228,6 +234,8 @@ The MiniCRM button keeps pointing at the profile of the shown name, even when th
 - **Bria Enterprise detection** from `Logs\Log.txt` (ring, answer, hang-up, missed call, rejected call; outgoing
   calls are ignored; mid-call re-INVITEs do not close the card).
 - **Windows integration**: tray icon, single-instance lock, per-user autostart through a Startup-folder shortcut (no admin rights).
+- **Installer and updates (0.5.0)**: one setup `.exe` (per-user, no UAC), Start menu entries, uninstaller in
+  *Settings > Apps*, and automatic updates from GitHub Releases (SHA-256 verified, never during a call).
 - **Diagnostics**: one log line per MiniCRM request (status, URL, page, item type counts, timing), optional raw response dumps,
   and `--probe-bria` to capture Bria's log format.
 
@@ -257,12 +265,104 @@ The MiniCRM button keeps pointing at the profile of the shown name, even when th
 | Chrome developer-mode extension | The extension is loaded unpacked, so Chrome shows a developer-mode warning at some start-ups | Planned: publish it unlisted on the Chrome Web Store |
 | Hungarian-centric number handling | `+36`, `06`, `0036` and PBX-prefixed `000 36...` forms are normalised; other countries are searched as `+<digits>` | - |
 | "Glass" effect is translucent only | No acrylic blur yet | - |
-| **Packaging not verified** | `build.ps1` / `install.ps1` exist but have not yet been run on a clean Windows machine; the `.exe` is unsigned, so SmartScreen may warn | See roadmap |
+| **Installer not yet run on a clean machine** | `build.ps1` / `installer.iss` / `updater.py` were written and their logic unit-tested, but the first real build and the first update cycle happen on the colleague's PC test | Follow [the test plan](#first-test-on-a-colleagues-pc) |
+| **Unsigned exe and installer** | No code-signing certificate. A setup downloaded with a browser gets a SmartScreen *Windows protected your PC* screen; antivirus may look harder at a new PyInstaller exe | *More info > Run anyway* once. Updates downloaded by the app itself carry no download mark, so they do not trigger SmartScreen. Code-signing is on the roadmap |
+| **Update integrity = GitHub account** | The installer is checked against the SHA-256 published in the same release, which catches broken downloads but not a compromised GitHub account | Keep 2FA on the GitHub account; code-signing would add a real publisher check |
 | No automated tests in the repository | The behaviour was verified with throw-away scripts (a fake MiniCRM server, a stand-in for Qt) and live calls | Planned |
 
 Unused configuration keys `minicrm.search_url` and `minicrm.parse.*` are leftovers from an earlier HTML-parsing
 approach and are ignored; `beautifulsoup4` and `lxml` are likewise no longer used by the lookup. They are still
 present in this release and will be removed in a later one.
+
+---
+
+## Installing on a PC (setup .exe)
+
+Nothing has to be installed beforehand: the setup contains the Python runtime, Qt and all assets.
+
+1. Run **`CallCompanion-Setup-<version>.exe`** (from the GitHub release page or a USB stick). If SmartScreen says
+   *Windows protected your PC*: **More info > Run anyway** (the file is not code-signed yet).
+2. There are no questions: it installs for the current user to `%LOCALAPPDATA%\Programs\CallCompanion` (no admin
+   rights), then the last page offers to start the app. The tray icon appears.
+3. **Chrome extension, once**: `chrome://extensions` > **Developer mode** > **Load unpacked** > choose
+   `%LOCALAPPDATA%\Programs\CallCompanion\extension` (Start menu: *Call Companion > Chrome extension folder* opens it).
+   Log in to MiniCRM in that Chrome.
+4. **Bria**: *Help > Troubleshooting > Support > Log Level = Verbose*, restart Bria.
+
+What the installer sets up:
+
+| | |
+|---|---|
+| Program | `%LOCALAPPDATA%\Programs\CallCompanion\CallCompanion.exe` (+ `_internal\`, `config.json`, `extension\`) |
+| Autostart | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Call Companion.lnk` (disable: Win+R `shell:startup`, delete it) |
+| Start menu | *Call Companion* (opens the status window) and *Chrome extension folder* |
+| Uninstall | *Settings > Apps > Installed apps > Call Companion > Uninstall* (or *Control Panel > Programs and Features*). Removes the program, the shortcuts and downloaded updates; keeps `%LOCALAPPDATA%\CallCompanion` (logs, personal config). Remove the Chrome extension by hand |
+| Old autostart | The `HKCU\...\Run\CallCompanion` value from source installs is deleted, so the app never starts twice |
+
+Silent install (e.g. remote): `CallCompanion-Setup-<version>.exe /VERYSILENT /SUPPRESSMSGBOXES`. Silent uninstall:
+`"%LOCALAPPDATA%\Programs\CallCompanion\unins000.exe" /VERYSILENT`.
+
+**Settings that survive updates**: every update replaces `config.json` next to the exe. Put personal changes in
+`%LOCALAPPDATA%\CallCompanion\config.json` instead (same format, only the keys you change); it is merged on top and never
+touched by the installer. Example, to turn automatic updates off on one PC: `{ "update": { "enabled": false } }`.
+
+### Automatic updates
+
+- About 15 s after start, and then every 6 hours, the app asks the GitHub Releases API of
+  `dekanyrichard87-bit/call-companion` for the newest release. Pre-releases count (all `0.x-beta` versions are
+  published as pre-releases); drafts do not.
+- If the newest tag (`v0.5.1-beta`, SemVer order) is newer than the running version, the app downloads
+  `CallCompanion-Setup-<version>.exe` in the background to `%LOCALAPPDATA%\CallCompanion\updates` and checks its
+  SHA-256 (GitHub's asset digest or the `.sha256` file published next to it). A file that does not match is deleted.
+- The update is applied only when **no call is ringing or running and no missed-call card is open**; otherwise it waits
+  and retries every 30 s. Then the app starts the installer with `/VERYSILENT` and quits; the installer closes any
+  leftover process, replaces the files, and starts the new version. A short tray message confirms it.
+- If the same version fails to install twice within 24 hours, the app stops trying and shows a tray message; the
+  installer's log is `%LOCALAPPDATA%\CallCompanion\update-install.log`.
+- Tray menu **Check for updates** checks at once (and reports "latest version" / errors); its tooltip shows the last
+  result. `CallCompanion.exe --check-update` writes a one-line report to `app.log` and exits.
+- Only an installed copy updates itself. Running from source or from an unpacked `dist\CallCompanion` folder only logs
+  that an update exists.
+
+---
+
+## Building the installer and publishing updates
+
+On the **build PC** (yours) only:
+
+- 64-bit Python 3.11+ with the `py` launcher
+- [Inno Setup 6.3+](https://jrsoftware.org/isinfo.php): `winget install JRSoftware.InnoSetup`
+- for publishing: GitHub CLI, logged in: `winget install GitHub.cli`, then `gh auth login`
+
+```powershell
+.\build.ps1             # -> dist\installer\CallCompanion-Setup-0.5.0-beta.exe (+ .sha256)
+.\build.ps1 -Publish    # same, then creates GitHub release v0.5.0-beta with both files (pre-release for -beta)
+.\build.ps1 -SkipInstaller   # only dist\CallCompanion\ (portable folder, no Inno Setup needed)
+```
+
+If scripts are blocked: `powershell -ExecutionPolicy Bypass -File .\build.ps1`. The script creates `.venv`, installs
+`requirements.txt`, runs PyInstaller (`callcompanion.spec`: windowed one-folder build, icon, Windows version info,
+`assets\` bundled), adds `config.json` and `extension\`, compiles `installer.iss` with the version from `version.py`, and
+writes the SHA-256 file. `-Publish` refuses to run with uncommitted changes (`-Force` overrides) and takes the release
+notes from the matching `CHANGELOG.md` section.
+
+**Releasing an update** (the installed PCs pick it up by themselves):
+
+1. Bump `__version__` in `version.py` (e.g. `0.5.1-beta`) and add a `CHANGELOG.md` section `## [0.5.1-beta] - date`.
+2. Commit and push.
+3. `.\build.ps1 -Publish`
+
+Do not delete or re-tag a published release that PCs have already installed; publish a higher version instead.
+
+### First test on a colleague's PC
+
+1. On your PC: `.\build.ps1 -Publish` (creates release `v0.5.0-beta`).
+2. On the colleague's PC: run the setup, load the Chrome extension, set Bria to Verbose (above).
+3. Tray icon > **Status window**: Bria, local API, extension and MiniCRM rows should turn green; make one real call.
+4. Update test: on your PC bump to `0.5.1-beta` (CHANGELOG entry), commit, `.\build.ps1 -Publish`. On the colleague's PC
+   use tray > **Check for updates** (or wait up to 6 h / restart the app). After a few seconds the icon disappears and
+   comes back, and the tray message says *Version 0.5.1-beta is running*.
+5. If something fails, collect `%LOCALAPPDATA%\CallCompanion\app.log` and `update-install.log`.
 
 ---
 
@@ -285,9 +385,10 @@ pip install -r requirements.txt
 python main.py
 ```
 
-A blue dot appears in the system tray. Hover it for the MiniCRM session status. **Double-click** it (or use the menu
+The phone icon appears in the system tray. Hover it for the MiniCRM session status. **Double-click** it (or use the menu
 entry **Status window**) to open the status window; `python main.py --show` opens it at start-up. Right-click menu:
-**Status window**, **Test incoming call**, **Re-check MiniCRM session**, **Quit**. Check the version with
+the version, **Status window**, **Test incoming call**, **Test outgoing call**, **Re-check MiniCRM session**,
+**Check for updates**, **Quit**. Check the version with
 `python main.py --version`.
 
 To try only the pop-up (no Bria, no MiniCRM) set `"mock": true` in `config.json` and run
@@ -338,27 +439,11 @@ Optional parameters: `dir=out` makes it an outgoing call, and `reason=cancel|bye
 says how the call ended (without `reason`, an unanswered incoming call counts as missed). The status window's simulator
 also has *Kimenő hívás* (outgoing) scenarios, and the tray menu has **Test outgoing call**.
 
-### 5. Standalone build and autostart (not yet verified on a clean machine)
+### 5. Standalone build
 
-```powershell
-.\build.ps1                    # -> dist\CallCompanion\ (exe, config.json, extension\) and dist\install.ps1
-cd dist
-.\install.ps1                  # copies to %LOCALAPPDATA%\Programs\CallCompanion, adds the Startup shortcut, starts the app
-```
-
-`install.ps1` keeps your edited `config.json` when updating; `uninstall.ps1` removes the app and autostart.
-
-**Autostart** is a shortcut `Call Companion.lnk` in the user's Startup folder
-(`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`), created by `install.ps1` (no admin rights). It also
-removes an older `Run` registry entry so the app is not started twice. At the end `install.ps1` prints a short check:
-program present, shortcut present, `config.json` free of fixed drive paths, and whether a Bria log was found. To
-disable autostart temporarily, delete the shortcut (Win+R, `shell:startup`). For a source checkout without the
-installer, `python main.py --install-autostart` / `--remove-autostart` still use the per-user `Run` registry key (do
-not combine both methods).
-
-Hand-over checklist for a colleague's PC: Chrome with the extension loaded and logged in to MiniCRM; Bria Log Level =
-Verbose; `config.json` as shipped (`mock: false`, no paths); `install.ps1`; then `python main.py --probe-bria 90` (or the
-installed exe with `--probe-bria 90`) during one test call.
+See [Building the installer and publishing updates](#building-the-installer-and-publishing-updates). For a source
+checkout without the installer, `python main.py --install-autostart` / `--remove-autostart` use the per-user `Run`
+registry key; the installer removes that key and uses a Startup-folder shortcut instead, so do not combine them.
 
 ---
 
@@ -432,8 +517,25 @@ set), `log_globs` (see above), `log_globs_fallback` (see above), `incoming_regex
 | `missed_max` | `4` (read by `main.py`, not in `config.py`) | Missed-call cards kept at once; the oldest is closed beyond that |
 | `missed_close_on_action` | `true` (read by `main.py`, not in `config.py`) | `true` = opening the contact or the Google search closes a missed-call card; `false` = only **✕** closes it |
 
-**Command line**: `--version`, `--show`, `--simulate NUMBER`, `--probe-bria [SECONDS]`, `--install-autostart`,
-`--remove-autostart`.
+**`update`** (auto-update, `updater.py`)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `true` | `false` = never check or update |
+| `repo` | `""` = `version.GITHUB_REPO` | GitHub `owner/name` whose Releases are checked |
+| `include_prereleases` | `true` | Pre-releases (all `-beta` versions) count as updates |
+| `check_interval_h` | `6` | Re-check while running; `0` = only after start |
+| `startup_delay_s` | `15` | First check this long after start |
+| `asset_regex` | `^CallCompanion-Setup-.+\\.exe$` | Which release asset is the installer |
+| `require_checksum` | `true` | Refuse an installer without a SHA-256 to compare against |
+| `github_token` | `""` | Only if the repository becomes private (read-only token) |
+| `timeout_s` | `15` | Timeout of the GitHub requests |
+
+**Where settings come from**: `config.py` defaults, then `config.json` next to the exe (shipped, replaced by updates),
+then `%LOCALAPPDATA%\CallCompanion\config.json` (optional, personal, kept by updates).
+
+**Command line**: `--version`, `--show`, `--simulate NUMBER`, `--probe-bria [SECONDS]`, `--check-update`,
+`--install-autostart`, `--remove-autostart` (source checkouts only), `--after-install` (used by the installer).
 
 ---
 
@@ -489,7 +591,7 @@ The status window's **Naplómappa megnyitása** button opens that folder.
   (optionally pinned to your extension id) and a localhost `Host` header; `/event` refuses browser-initiated requests.
 - The extension sends the MiniCRM session cookies to the local app only. It does not contact any
   other server.
-- The only outside traffic from the app is to `r3.minicrm.hu`: the lookup, the company detail request (stage 2, up to 3
+- Besides the update check (below), the only outside traffic from the app is to `r3.minicrm.hu`: the lookup, the company detail request (stage 2, up to 3
   per call), the session check and the warm-up request
   (about every 30 s while a session exists, carrying your session cookies like any normal MiniCRM request). The Google
   button simply opens a search in your browser.
@@ -498,6 +600,9 @@ The status window's **Naplómappa megnyitása** button opens that folder.
   the app quits.
 - `debug_dump` files (including the company detail answers `last_lookup_company_<id>.json`) contain real customer data: keep it `false` except while diagnosing, and delete the dumps afterwards.
 - `bria_probe.txt` contains phone numbers and SIP data: redact before sharing.
+- **Updates**: the app calls `api.github.com` (release list, no personal data, no token) and downloads the installer from
+  GitHub's download servers. The installer runs only after its SHA-256 matches the one published in the release.
+  Turn it off with `"update": {"enabled": false}`.
 
 ---
 
@@ -507,14 +612,16 @@ Done in 0.3.0-beta: status window, connection warm-up, extension retry and heart
 window placement and re-check feedback. Done in 0.3.1-beta: Person-only search with paging and deal-subtext fallbacks
 (callers with many deal cards), expiry for cached results, the name / company / number card layout and the company
 name in a second stage, including duplicate `Person` profiles. Done in 0.4.0-beta: faster extension sync, persistent
-missed-call cards, the in-call duration counter and outgoing-call cards.
+missed-call cards, the in-call duration counter and outgoing-call cards. Done in 0.5.0-beta: one-click installer,
+uninstaller and automatic updates from GitHub Releases.
 
 Next:
 
 1. **Live test** with Bria Enterprise and the Chrome extension on the office PC: detection, lookup timing with warm-up,
    the company line on real calls, and the stale-log warning on a quiet line.
 2. **Lookup timing breakdown** in the log (connect / server / parse), if the live test shows the lookup is still slow.
-3. **Standalone `.exe`**: verify the PyInstaller build and install scripts on a clean Windows machine, then code-sign.
+3. **Installer and auto-update** (built in 0.5.0-beta): first real build, install and update cycle on the colleague's
+   PC; then code-signing.
 4. **Clean-up**: remove the legacy `minicrm.search_url` / `minicrm.parse.*` keys and the unused `beautifulsoup4` / `lxml`
    packages.
 
@@ -528,14 +635,16 @@ calls, acrylic blur, Chrome Web Store (unlisted) publication of the extension.
 
 ```
 callcompanion/
-  main.py  detectors.py  events.py  local_api.py  crm.py  overlay.py  status_window.py  probe.py
+  main.py  detectors.py  events.py  local_api.py  crm.py  overlay.py  status_window.py  probe.py  updater.py
   config.py  config.json  version.py  requirements.txt
   extension/            manifest.json  background.js  content.js
-  build.ps1  callcompanion.spec  install.ps1  uninstall.ps1
+  assets/               app.ico
+  build.ps1  callcompanion.spec  installer.iss
   README.md  CHANGELOG.md  HANDOFF.md  .gitignore
 ```
 
-Runtime data lives in `%LOCALAPPDATA%\CallCompanion\` (`app.log`, `app.lock`, optional dumps and probe output).
+Runtime data lives in `%LOCALAPPDATA%\CallCompanion\` (`app.log`, `app.lock`, optional personal `config.json`,
+`updates\`, `update-install.log`, optional dumps and probe output).
 
 ---
 
@@ -547,11 +656,8 @@ the same number in `extension/manifest.json` (`version` `0.4.0`; Chrome does not
 `version`, and the manifest currently has no `version_name`). The extension changed in 0.4.0-beta (start-up sync), so
 its number moved from `0.3.0` to `0.4.0`.
 
-To cut a release: update `version.py`, `CHANGELOG.md` (and `extension/manifest.json` if the extension changed), commit, then
-
-```powershell
-git tag -a v0.4.0-beta -m "Call Companion 0.4.0-beta"
-git push origin v0.4.0-beta      # if the repository has a remote
-```
+To cut a release: update `version.py`, `CHANGELOG.md` (and `extension/manifest.json` if the extension changed), commit,
+push, then `.\build.ps1 -Publish`. It creates the tag `v<version>` on the current commit together with the GitHub
+release, and installed copies update to it (see [Building the installer](#building-the-installer-and-publishing-updates)).
 
 See [CHANGELOG.md](CHANGELOG.md) for the history.

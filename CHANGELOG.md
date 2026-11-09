@@ -3,6 +3,37 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [0.5.0-beta] - 2026-11-09
+
+Deployment release: one setup `.exe` for a PC without Python, with autostart, an uninstaller and automatic updates
+from GitHub Releases. Call handling is unchanged from 0.4.0-beta.
+
+### Added
+- **Installer** (`installer.iss`, Inno Setup 6.3+): one-click, per-user install to `%LOCALAPPDATA%\Programs\CallCompanion`
+  without admin rights; Start menu entries (*Call Companion*, *Chrome extension folder*); autostart shortcut in the
+  user's Startup folder; registered in *Settings > Apps* with an uninstaller. It closes a running copy before copying,
+  starts the app at the end (also when run silently), deletes the old `HKCU\...\Run\CallCompanion` autostart value,
+  and shows the Chrome extension steps on its last page. English and Hungarian setup texts.
+- **Auto-updater** (`updater.py`): checks the GitHub Releases of `dekanyrichard87-bit/call-companion` 15 s after start
+  and every 6 hours, picks the highest SemVer tag (pre-releases included), downloads `CallCompanion-Setup-<version>.exe`
+  in the background, verifies its SHA-256 (GitHub digest or `.sha256` asset), and runs it with `/VERYSILENT` once no
+  call is ringing / running and no missed-call card is open; the app then quits and the installer restarts it. Gives
+  up after two failed installs of the same version in 24 h. New `update` config block (see README).
+- Tray menu: version line and **Check for updates** (tooltip shows the last result); `--check-update` and
+  `--after-install` command-line options; `Controller.is_busy()`.
+- **App icon** `assets/app.ico` (tray, exe, installer, Apps list) and Windows version info in the exe.
+- **Personal config file**: `%LOCALAPPDATA%\CallCompanion\config.json` is merged on top of the shipped `config.json`
+  and is never touched by updates. `config.json` files saved with a BOM (Notepad) are accepted.
+
+### Changed
+- `build.ps1` builds the exe **and** the installer, writes the `.sha256` file, and with `-Publish` creates the GitHub
+  release (`gh`), using the matching CHANGELOG section as notes. Version numbers come from `version.py` everywhere.
+- `callcompanion.spec`: bundles `assets\`, sets the icon and the file version.
+- `version.py`: `GITHUB_REPO` and `numeric_version()`.
+
+### Removed
+- `install.ps1` and `uninstall.ps1` (replaced by the installer and its uninstaller).
+
 ## [0.4.0-beta] - 2026-11-09
 
 Call life-cycle release: the card now follows the whole call, missed calls are not lost, outgoing calls are covered,
