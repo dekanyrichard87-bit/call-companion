@@ -1,0 +1,12 @@
+{
+  "minicrm": {
+    "mock": false,
+    "debug_dump": false,
+    "company_request": {
+      "Requests[0][Method]": "GET",
+      "Requests[0][Uri]": "Rpc/Account/MainInfo/{id}",
+      "Requests[1][Method]": "GET",
+      "Requests[1][Uri]": "Rpc/Account/DetailedInfo/{id}"
+    }
+  }
+}

@@ -1,0 +1,7 @@
+PySide6>=6.6
+requests>=2.31
+beautifulsoup4>=4.12
+lxml>=5.0
+pyinstaller>=6.0
+# optional, only for minicrm.cookie_source = "browser" (fails on Chrome 127+):
+# browser-cookie3>=0.19
