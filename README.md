@@ -1,11 +1,13 @@
 # Call Companion
 
-**Version 0.3.1-beta** · Windows · Python 3.11+ / PySide6
+**Version 0.4.0-beta** · Windows · Python 3.11+ / PySide6
 
 Call Companion is a small tray application that watches the **Bria Enterprise** softphone and, the moment a
 call rings, shows a dark, frameless pop-up card in the bottom-right corner of the screen. The card shows the
 caller's number immediately and, a moment later, the caller's **name from MiniCRM** and, a little later still, the
-caller's **company**, with one-click buttons to open the contact in MiniCRM, search the number on Google, or copy it. A **status window** (double-click the tray
+caller's **company**, with one-click buttons to open the contact in MiniCRM, search the number on Google, or copy it.
+While you talk, the card stays open and counts the call duration; a **missed call** stays on screen until you close
+it; and **outgoing calls** get the same card and lookup for the number you dial. A **status window** (double-click the tray
 icon) shows whether every part is healthy and lists the recent calls.
 
 It needs **no API keys and no separate MiniCRM login**: it reuses the MiniCRM session of the Chrome profile you
@@ -29,12 +31,12 @@ are already logged in with, delivered by a tiny Chrome extension.
 ```
  Chrome (logged in to MiniCRM)                              Bria Enterprise
    extension/background.js                                    writes ...\Bria Enterprise\6.0\<profile>\Logs\Log.txt
-   extension/content.js (user name)                                     |
+   extension/content.js (wake-up poke)                                  |
    cookies of *.minicrm.hu                                              |  tailed every 0.1 s
         |  POST 127.0.0.1:48653/ext/session                              |
         v                                                                v
    local_api.LocalApi                                       detectors.BriaLogDetector
-        |  session cookies, user name                           |  CallEvent: ringing / answered / ended
+        |  session cookies                                      |  CallEvent: ringing / answered / ended
         v                                                       v
    crm.MiniCrmClient  <---- lookup(number) ----  main.Controller (Qt main thread)
         |                                                       |            |
@@ -54,19 +56,32 @@ are already logged in with, delivered by a tiny Chrome extension.
 4. **Stage 2, in the background:** if the name is known but no company came with it, a second request fetches the
    contact's detail record (about 120 ms) and the **company** appears on the card's second line. The name never waits
    for it. If the request fails or finds no company, nothing changes on the card.
-5. When you answer, the card shrinks to a compact "IN CALL" view (name and number) and fades out after 2.5 s.
-6. When the call ends or is missed (`BYE`, `CANCEL`, or a 3xx-6xx reply before answering), the card fades out and
-   is destroyed. A company that arrives after the call was answered, ended or replaced by a newer call is dropped.
+5. When you answer, the card stays open as an **IN CALL** card with a live duration counter (`00:15`, `01:42`, then
+   `1:02:03`) and keeps the name, company, number and buttons. When the call ends (`BYE`) the card fades out and is
+   destroyed.
+6. If the caller gives up before you answer (`CANCEL`), the card turns into a **MISSED CALL** card that stays until
+   you close it (see below). Calls you decline, calls answered on another phone (`Reason: ... completed elsewhere`)
+   and calls that fail do not count as missed: their card fades out as before.
+7. An **outgoing call** (you dial in Bria) shows the same card with **OUTGOING CALL**, looks up the *dialled* number the
+   same way, switches to the duration counter when the other side answers and fades out when the call ends. An
+   unanswered outgoing call never becomes a missed-call card.
 
 **The card, top to bottom**
 
 ```
- ● INCOMING CALL                                  ✕
+ ● INCOMING CALL                                  ✕     (OUTGOING CALL / IN CALL 01:42 / MISSED CALL ×2 · 08:41)
  Neupert Márk                  line 1  name: large, bold
  Dekoros Művek Kft.            line 2  company: medium (hidden when MiniCRM has none)
  +36 30 525 6058               line 3  phone number: small, muted
  [ 🔍 MiniCRM ] [ 🌐 Google ] [ 📋 Copy ]
 ```
+
+**Missed-call cards.** A missed call stays on screen **indefinitely** until you close it with **✕**, or open the contact
+(**MiniCRM**) or search the number (**Google**), which counts as dealt with. **Copy** keeps the card. Several cards can
+be on screen: the live call (or a notice) is at the bottom, the missed-call cards are stacked above it, the newest
+nearest to the bottom. A repeated missed call from the same number replaces the older card and counts up (`×2`, `×3`).
+At most 4 missed-call cards are kept (the oldest is closed to make room). The name and company of a missed call are
+filled in even if the lookup finishes after the caller hung up.
 
 Before the lookup answers, the number is the big line and "Looking up…" sits below it. An unknown caller shows
 **Ismeretlen hívó** with the number below; a failed lookup shows the number, "Lookup failed" and the reason (it is not
@@ -79,13 +94,13 @@ Every call is also recorded in the status window's call table (time, number, nam
 | File | Role |
 |---|---|
 | `main.py` | Entry point, tray icon and menu, `Controller` (glues events, lookup, card and status together), autostart |
-| `detectors.py` | `BriaLogDetector`: tails Bria's `Log.txt` and rebuilds call state from the SIP messages in it |
-| `events.py` | `CallEvent` and `normalize_number` |
+| `detectors.py` | `BriaLogDetector`: tails Bria's `Log.txt` and rebuilds call state (incoming and outgoing, with the end reason) from the SIP messages in it |
+| `events.py` | `CallEvent` (kind, call id, number, source, `direction` in/out, end `reason`) and `normalize_number` |
 | `local_api.py` | Local HTTP server on `127.0.0.1:48653` for the extension (`/ext/session`, `/ext/ping`) and test events (`/event`) |
 | `crm.py` | `MiniCrmClient`: session cookies, MiniCRM lookup (name, then company), duplicate-profile handling, caching, connection warm-up, diagnostics |
-| `overlay.py` | `CallOverlay`: the frameless dark card (name / company / number lines), states, buttons, fade animations |
+| `overlay.py` | `CallOverlay`: the frameless dark card (name / company / number lines), states (ringing, outgoing, in call with counter, missed), card stacking, buttons, fade animations |
 | `status_window.py` | `StatusModel` (data) and `StatusWindow` (dark window: health, call table, simulator, re-check) |
-| `extension/` | Chrome MV3 extension: `background.js` relays the MiniCRM session cookies, `content.js` reads the user name |
+| `extension/` | Chrome MV3 extension: `background.js` relays the MiniCRM session cookies, `content.js` pokes the worker so the sync is fast |
 | `probe.py` | `--probe-bria`: captures what Bria writes during a test call (for adapting the parser) |
 | `config.py` / `config.json` | Defaults and your overrides (deep-merged) |
 | `version.py` | Version number (single source of truth) |
@@ -182,10 +197,16 @@ The MiniCRM button keeps pointing at the profile of the shown name, even when th
 - **Caller resolution from MiniCRM** through the `Batch` search request with the Person-only filter (callers with
   dozens of deal cards still resolve on page 1), the three-step number fallback, the paging and deal-subtext
   fallbacks described above, and an in-memory cache with expiry.
-- **Pop-up card** with live updates: ringing, answered (compact view, auto fade), ended or missed (immediate fade),
+- **Pop-up card** with live updates: ringing or dialling, in call (live duration), ended (fades out), missed (stays),
   and a notice card when the MiniCRM login has expired. Buttons: MiniCRM profile, Google search, copy number, close.
   The card sits above the taskbar, never steals keyboard focus, and survives back-to-back calls. Line order: **name**
   (large, bold), **company** (medium, hidden when there is none), **phone number** (small, muted).
+- **Call duration counter**: an answered call keeps its card open with a live `mm:ss` counter until the call ends.
+- **Persistent missed-call cards**: a missed call stays until you close it; stacked, counted per number, name and
+  company filled in even if they arrive late (config: `ui.missed_persistent`, `ui.missed_max`, `ui.missed_close_on_action`).
+- **Outgoing calls**: the card and the MiniCRM lookup (name and company) also work for the number you dial from Bria.
+- **Faster start-up sync**: the Chrome extension retries every 2 s for 2 minutes after the app was not reachable, and a
+  MiniCRM tab pokes it every 5 s, so the session usually arrives within seconds of the app starting.
 - **Company name in two stages**: the name appears first, the company follows from the contact's detail record
   (`BusinessRelated`), also for callers with a private and a business profile under one number (same-name guard).
   Optional and off until `company_request` is configured.
@@ -204,11 +225,9 @@ The MiniCRM button keeps pointing at the profile of the shown name, even when th
   without a push.
 - **Connection warm-up**: a light request about every 30 s keeps one connection to MiniCRM open so the lookup at ring
   time does not pay for a new TLS handshake.
-- **Greeting with your name**: the extension reads the logged-in user's name from the MiniCRM page (selectors still
-  need to be checked on the real page, see limits).
 - **Bria Enterprise detection** from `Logs\Log.txt` (ring, answer, hang-up, missed call, rejected call; outgoing
   calls are ignored; mid-call re-INVITEs do not close the card).
-- **Windows integration**: tray icon, single-instance lock, per-user autostart (no admin rights).
+- **Windows integration**: tray icon, single-instance lock, per-user autostart through a Startup-folder shortcut (no admin rights).
 - **Diagnostics**: one log line per MiniCRM request (status, URL, page, item type counts, timing), optional raw response dumps,
   and `--probe-bria` to capture Bria's log format.
 
@@ -218,7 +237,7 @@ The MiniCRM button keeps pointing at the profile of the shown name, even when th
 
 | Limit | Why | Workaround / plan |
 |---|---|---|
-| **First call right after boot can still fail** with "no MiniCRM session yet" | The app starts before Chrome and the extension have delivered the cookies. With the extension retry this normally takes seconds once Chrome is running, but it is not instant and has not been measured on the office PC | Make sure Chrome (with MiniCRM logged in) is running before the first call; the status window shows when the session has arrived. Optional later: keep the last session encrypted per user |
+| **First call right after boot can still fail** with "no MiniCRM session yet" | The app starts before Chrome and the extension have delivered the cookies. Since 0.4.0 the extension retries every 2 s for 2 minutes (and a MiniCRM tab pokes it every 5 s), so this should take seconds, but it has not been timed on the office PC | Make sure Chrome (with MiniCRM logged in) is running before the first call; the status window shows when the session has arrived. Optional later: keep the last session encrypted per user |
 | **Lookup time not re-measured with warm-up** | 0.2.0 measured about 1.2 s for the first lookup after a session sync (connection setup plus MiniCRM's search time). Warm-up should remove the connection part; the lookup log line now shows `warm=` and the time, but there is no finer breakdown yet | Check `app.log` during the live test. The number is shown instantly, only the name arrives later; repeat callers are cached |
 | **Company needs a one-time config entry** | The detail request is MiniCRM specific, so stage 2 stays off until `company_request` is in `config.json` (the shipped `config.json` from 0.3.1-beta includes it) | See [Company name settings](#company-name-settings-stage-2). Without it the card simply has no company line |
 | **Company field is an assumption for other accounts** | It was confirmed for this MiniCRM system (`BusinessRelated > Name`); another system may name the field differently | The `company id=... -> none ... fields=[...]` log line lists the answer's field paths (names only); set `company_path` to the right one |
@@ -227,9 +246,12 @@ The MiniCRM button keeps pointing at the profile of the shown name, even when th
 | **A name taken from a deal card is a fallback** | When no person card exists, the name comes from the deal's sub-line, and only if all matching cards agree. The layout of that sub-line has not been verified against a real response yet (it is assumed to be in the result's `Content` field) | If the name is missing or wrong, check the `deal fallback: ...` log line (below) and, if needed, set `debug_dump` and look at one dump |
 | Only the **first matching person's name** is shown | Deliberate. Other `Person` items for the number are used only to find a company (same name only, at most 3) | - |
 | A company is shown only if it is on a profile with the **same name** | `company_same_name` guards against showing a colleague's company | `"company_same_name": false` accepts any profile with that number |
-| One call card at a time | A new ringing call replaces the previous card | - |
+| One **live** call card at a time | A new ringing call replaces the previous live card (a call that was answered or still ringing then has no card any more); missed-call cards are kept | - |
+| **Outgoing calls are unverified against a real Bria log** | The outgoing INVITE layout (dialled number in the `To` header, 401/407 challenges) was built from the SIP standard and the `Transmitting to` marker, not from a captured call | Run `python main.py --probe-bria 90`, place an outgoing test call and check `Parser recognised ...: ['ringing','answered','ended']`; keep `bria_probe.txt` if not |
+| **"Answered elsewhere" is unverified** | A call picked up on another phone is told apart from a missed call by the `Reason: ... completed elsewhere` header of the CANCEL; whether your PBX sends it is not known | If such calls leave a missed-call card, send the CANCEL lines from `--probe-bria` |
+| **A lost hang-up leaves the in-call card open** | The card closes on the `BYE` found in the Bria log; if the log is rotated or the line is missed, the counter keeps running | Close it with **✕** |
+| Missed-call cards: at most 4 | The stack must fit on the screen | `ui.missed_max` |
 | Needs Bria **Log Level = Verbose** | At lower levels Bria writes no SIP messages | Help > Troubleshooting > Support. Verbose logs grow quickly. The app opens the log only for each read, so Bria can rotate or rename it; rotation has not been tested live |
-| **User name selectors are guesses** | The MiniCRM page structure has not been inspected; `extension/content.js` tries common selectors | If the greeting has no name, open the MiniCRM page console: `[CallCompanion] user name not found` means the selectors need adjusting (instructions are at the top of `content.js`) |
 | **Status window position is best effort** | Windows 11 often reports no position for tray icons, so the window goes to the bottom-right of the usable area of the screen under the cursor (or the primary screen) rather than exactly at the icon | - |
 | **Stale-log warning after 30 min** | The Bria health row turns yellow when `Log.txt` has not changed for 30 minutes, which can also happen on a quiet line | Treat it as a hint, not an error |
 | Chrome developer-mode extension | The extension is loaded unpacked, so Chrome shows a developer-mode warning at some start-ups | Planned: publish it unlisted on the Chrome Web Store |
@@ -274,8 +296,13 @@ To try only the pop-up (no Bria, no MiniCRM) set `"mock": true` in `config.json`
 ### 2. Bria Enterprise
 
 1. In Bria: **Help > Troubleshooting > Support > Log Level = Verbose**, then restart Bria.
-2. The default log path is `%APPDATA%\CounterPath Corporation\Bria Enterprise\*\*\Logs\Log.txt`; the newest file
-   wins. Change `detectors.bria_log.log_globs` if yours differs.
+2. Nothing needs configuring: the log is found by itself under `%APPDATA%`. The user-specific profile folder (for
+   example `104@company.hu` or `default_user`) is a wildcard, and the **most recently written** file wins, so another
+   colleague's account on another PC works without edits. Search order: (1) `detectors.bria_log.log_path`, if you set
+   an exact file; (2) `log_globs`, default `%APPDATA%\CounterPath Corporation\Bria Enterprise\*\*\Logs\Log.txt`;
+   (3) only when (2) matches nothing, `log_globs_fallback`, default `...\*\*\Diagnostic Log\*.log` and
+   `...\*\*\Logs\*.log`. If the fallback is used the log says `no file matches ...log_globs; using fallback match <file>`.
+   The fallback layouts are not verified against a real Bria: check with step 3.
 3. Check it: `python main.py --probe-bria 90`, then ring, answer and hang up within 90 s. The last line must say
    `Parser recognised 3 event(s): ['ringing','answered','ended']`. If not, keep `%LOCALAPPDATA%\CallCompanion\bria_probe.txt`
    (it contains phone numbers; redact before sharing) so the parser can be adapted.
@@ -285,7 +312,7 @@ To try only the pop-up (no Bria, no MiniCRM) set `"mock": true` in `config.json`
 ### 3. Chrome extension (pairing)
 
 1. Open `chrome://extensions`, switch on **Developer mode**, click **Load unpacked**, choose the `extension` folder.
-   After updating the app, click the reload icon on the extension card.
+   After updating the app (0.4.0 changed the extension), click the reload icon on the extension card.
 2. Log in to MiniCRM in **that Chrome profile**.
 3. With the app running, `app.log` shows `extension push (...): N cookies` and the tray tooltip changes to
    *MiniCRM: logged in*; the status window's extension row shows the last sync time. A red `!` on the extension icon
@@ -293,8 +320,8 @@ To try only the pop-up (no Bria, no MiniCRM) set `"mock": true` in `config.json`
 4. Optional hardening: copy the extension's ID from `chrome://extensions` into `local_api.extension_id` so only
    that extension may talk to the app.
 
-The extension needs the `cookies`, `alarms` and `storage` permissions, host access to `https://r3.minicrm.hu/*`
-(cookies, and a content script that reads your display name) and to `http://127.0.0.1/*`. It talks only to
+The extension needs the `cookies` and `alarms` permissions, host access to `https://r3.minicrm.hu/*`
+(cookies, and a content script that only wakes the extension and reads nothing from the page) and to `http://127.0.0.1/*`. It talks only to
 `127.0.0.1:48653` (the port must match `config.json` and `extension/background.js`).
 
 ### 4. Test without a real call
@@ -304,19 +331,34 @@ From the status window: enter a number, pick a scenario, click **Szimulálás**.
 ```powershell
 Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:48653/event?type=ring&number=%2B36301234567&id=t1"
 Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:48653/event?type=answer&id=t1"
-Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:48653/event?type=end&id=t1"
+Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:48653/event?type=end&id=t1&reason=bye"
 ```
+
+Optional parameters: `dir=out` makes it an outgoing call, and `reason=cancel|bye|rejected|failed|elsewhere` on `type=end`
+says how the call ended (without `reason`, an unanswered incoming call counts as missed). The status window's simulator
+also has *Kimenő hívás* (outgoing) scenarios, and the tray menu has **Test outgoing call**.
 
 ### 5. Standalone build and autostart (not yet verified on a clean machine)
 
 ```powershell
 .\build.ps1                    # -> dist\CallCompanion\ (exe, config.json, extension\) and dist\install.ps1
 cd dist
-.\install.ps1                  # copies to %LOCALAPPDATA%\Programs\CallCompanion, enables autostart, starts the app
+.\install.ps1                  # copies to %LOCALAPPDATA%\Programs\CallCompanion, adds the Startup shortcut, starts the app
 ```
 
 `install.ps1` keeps your edited `config.json` when updating; `uninstall.ps1` removes the app and autostart.
-Autostart alone: `python main.py --install-autostart` / `--remove-autostart` (per-user `Run` registry key).
+
+**Autostart** is a shortcut `Call Companion.lnk` in the user's Startup folder
+(`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`), created by `install.ps1` (no admin rights). It also
+removes an older `Run` registry entry so the app is not started twice. At the end `install.ps1` prints a short check:
+program present, shortcut present, `config.json` free of fixed drive paths, and whether a Bria log was found. To
+disable autostart temporarily, delete the shortcut (Win+R, `shell:startup`). For a source checkout without the
+installer, `python main.py --install-autostart` / `--remove-autostart` still use the per-user `Run` registry key (do
+not combine both methods).
+
+Hand-over checklist for a colleague's PC: Chrome with the extension loaded and logged in to MiniCRM; Bria Log Level =
+Verbose; `config.json` as shipped (`mock: false`, no paths); `install.ps1`; then `python main.py --probe-bria 90` (or the
+installed exe with `--probe-bria 90`) during one test call.
 
 ---
 
@@ -376,10 +418,19 @@ system: open a contact in MiniCRM with Chrome DevTools (F12) > Network open, fin
 
 **`local_api`**: `enabled` (`true`), `host` (`127.0.0.1`), `port` (`48653`), `extension_id` (`""`, optional pin).
 
-**`detectors.bria_log`**: `enabled` (`true`), `log_globs` (see above), `incoming_regex` (`incoming from`),
+**`detectors.bria_log`**: `enabled` (`true`), `log_path` (`""`; optional exact log file or list of files, no search when
+set), `log_globs` (see above), `log_globs_fallback` (see above), `incoming_regex` (`incoming from`),
 `outgoing_regex` (`Transmitting to`): the markers Bria writes before each SIP message.
 
-**`ui`**: `answered_fade_ms` (`2500`), `margin_px` (`16`).
+**`ui`**
+
+| Key | Default | Meaning |
+|---|---|---|
+| `margin_px` | `16` | Distance of the cards from the screen edge |
+| `answered_fade_ms` | `2500` | **No longer used** since 0.4.0 (an answered call keeps its card until the call ends); kept so existing `config.json` files stay valid |
+| `missed_persistent` | `true` (read by `main.py`, not in `config.py`) | `false` = missed calls fade out like before |
+| `missed_max` | `4` (read by `main.py`, not in `config.py`) | Missed-call cards kept at once; the oldest is closed beyond that |
+| `missed_close_on_action` | `true` (read by `main.py`, not in `config.py`) | `true` = opening the contact or the Google search closes a missed-call card; `false` = only **✕** closes it |
 
 **Command line**: `--version`, `--show`, `--simulate NUMBER`, `--probe-bria [SECONDS]`, `--install-autostart`,
 `--remove-autostart`.
@@ -394,13 +445,18 @@ The status window's **Naplómappa megnyitása** button opens that folder.
 | You see | Meaning / action |
 |---|---|
 | `Tailing Bria log: <path> (utf-...)` | The Bria log was found and is being followed |
-| `event: ringing +36... (bria-log)` | Detection works |
+| `event: ringing +36... (bria-log)` | Detection works for an incoming call |
+| `event: ringing +36... (bria-log, out)` | An outgoing call was detected (the number is the dialled one) |
+| `event: ended +36... (bria-log, cancel)` | The caller hung up before you answered: a missed-call card appears |
+| `event: ended ... (bria-log, elsewhere\|rejected\|failed\|bye)` | Answered on another phone / declined by you / failed / normal hang-up: no missed-call card |
+| Outgoing calls show no card | The outgoing INVITE is not recognised: run `--probe-bria` during an outgoing test call (see limits) |
+| Every call from a ring group leaves a missed-call card | The PBX does not send `Reason: ... completed elsewhere`: keep the CANCEL lines of `--probe-bria` |
 | No `event:` lines during a call | Bria Log Level is not Verbose, or the log path/markers differ: run `--probe-bria` |
 | Bria row "Nem található: ..." | The followed log file disappeared: check the Bria profile folder |
-| Bria row "Nem található Bria naplófájl (log_globs?)" | The watcher runs but `log_globs` matches no file: check the path and the Bria profile folder |
+| Bria row "Nem található Bria naplófájl (log_globs?)" | The watcher runs but no log file was found under `%APPDATA%\CounterPath Corporation\Bria Enterprise\`: start Bria once (Log Level = Verbose), or set `detectors.bria_log.log_path` to the exact file |
 | Bria row "A napló N perce nem változott" | Bria may not be running, or the line is simply quiet |
 | `lookup ... no MiniCRM session yet` / card says so | The extension has not pushed cookies yet: open Chrome with MiniCRM logged in; check the extension badge |
-| `extension push (startup\|cookies\|heartbeat\|retry\|user\|installed): N cookies` | The extension delivered the session (the reason shows what triggered the push) |
+| `extension push (startup\|cookies\|heartbeat\|retry\|retry-fast\|poke\|user\|installed): N cookies` | The extension delivered the session (the reason shows what triggered the push; `retry-fast` and `poke` = it was waiting for the app and delivered within seconds of the app starting) |
 | `session state: False` / "MiniCRM login needed" card | The MiniCRM session expired: log in again in Chrome |
 | `session state: None no cookies` | No extension push yet: Chrome closed or extension not loaded |
 | `connection warm-up active` / `failing` | The keep-alive request to MiniCRM works / does not work (logged on state changes only) |
@@ -424,7 +480,6 @@ The status window's **Naplómappa megnyitása** button opens that folder.
 | `HTTP 404 from .../Batch` | The request URL is wrong: check `system_id` / `batch_url` |
 | `unexpected response, not JSON` | MiniCRM returned a page instead of data (login page?): check the session |
 | `unrecognised ...` / `unexpected JSON, keys=[...]` | MiniCRM changed its response format: keep the log line and the dump |
-| Console: `[CallCompanion] user name not found` (MiniCRM page, F12) | The greeting selectors in `extension/content.js` do not match; see the comment at its top |
 
 ---
 
@@ -432,7 +487,7 @@ The status window's **Naplómappa megnyitása** button opens that folder.
 
 - The local API listens on `127.0.0.1` only. Extension endpoints accept only a `chrome-extension://` origin
   (optionally pinned to your extension id) and a localhost `Host` header; `/event` refuses browser-initiated requests.
-- The extension sends the MiniCRM session cookies and your display name to the local app only. It does not contact any
+- The extension sends the MiniCRM session cookies to the local app only. It does not contact any
   other server.
 - The only outside traffic from the app is to `r3.minicrm.hu`: the lookup, the company detail request (stage 2, up to 3
   per call), the session check and the warm-up request
@@ -448,15 +503,16 @@ The status window's **Naplómappa megnyitása** button opens that folder.
 
 ## Roadmap
 
-Done in 0.3.0-beta: status window, connection warm-up, extension retry and heartbeat, user name greeting, status
+Done in 0.3.0-beta: status window, connection warm-up, extension retry and heartbeat, status
 window placement and re-check feedback. Done in 0.3.1-beta: Person-only search with paging and deal-subtext fallbacks
 (callers with many deal cards), expiry for cached results, the name / company / number card layout and the company
-name in a second stage, including duplicate `Person` profiles.
+name in a second stage, including duplicate `Person` profiles. Done in 0.4.0-beta: faster extension sync, persistent
+missed-call cards, the in-call duration counter and outgoing-call cards.
 
 Next:
 
 1. **Live test** with Bria Enterprise and the Chrome extension on the office PC: detection, lookup timing with warm-up,
-   the company line on real calls, the user name selectors, and the stale-log warning on a quiet line.
+   the company line on real calls, and the stale-log warning on a quiet line.
 2. **Lookup timing breakdown** in the log (connect / server / parse), if the live test shows the lookup is still slow.
 3. **Standalone `.exe`**: verify the PyInstaller build and install scripts on a clean Windows machine, then code-sign.
 4. **Clean-up**: remove the legacy `minicrm.search_url` / `minicrm.parse.*` keys and the unused `beautifulsoup4` / `lxml`
@@ -487,15 +543,15 @@ Runtime data lives in `%LOCALAPPDATA%\CallCompanion\` (`app.log`, `app.lock`, op
 
 [Semantic Versioning](https://semver.org) with a pre-release label. `0.x` means beta: features and configuration may
 still change. `1.0.0` is reserved for the first release with a verified standalone build. The Chrome extension carries
-the same number in `extension/manifest.json` (`version` `0.3.0`; Chrome does not accept a pre-release label in
-`version`, and the manifest currently has no `version_name`). The extension did not change in 0.3.1-beta, so its
-number stays `0.3.0`; bump it only when the extension itself changes.
+the same number in `extension/manifest.json` (`version` `0.4.0`; Chrome does not accept a pre-release label in
+`version`, and the manifest currently has no `version_name`). The extension changed in 0.4.0-beta (start-up sync), so
+its number moved from `0.3.0` to `0.4.0`.
 
 To cut a release: update `version.py`, `CHANGELOG.md` (and `extension/manifest.json` if the extension changed), commit, then
 
 ```powershell
-git tag -a v0.3.1-beta -m "Call Companion 0.3.1-beta"
-git push origin v0.3.1-beta      # if the repository has a remote
+git tag -a v0.4.0-beta -m "Call Companion 0.4.0-beta"
+git push origin v0.4.0-beta      # if the repository has a remote
 ```
 
 See [CHANGELOG.md](CHANGELOG.md) for the history.

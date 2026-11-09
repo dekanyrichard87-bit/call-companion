@@ -3,7 +3,8 @@
 Routes
   POST /ext/session   extension -> app: MiniCRM cookies + user agent   (Origin must be chrome-extension://)
   GET  /ext/ping      extension reachability check                     (Origin must be chrome-extension://)
-  GET  /event?type=ring|answer|end&number=..&id=..   manual / test call events
+  GET  /event?type=ring|answer|end&number=..&id=..[&dir=in|out][&reason=cancel|bye|rejected|failed|elsewhere]
+                      manual / test call events (dir defaults to in; reason is only used with type=end)
 
 Hardening: Host header must be 127.0.0.1/localhost (DNS-rebinding), extension routes require a
 chrome-extension:// Origin (optionally pinned to one extension id), /event refuses browser-initiated
@@ -20,6 +21,8 @@ from events import CallEvent, normalize_number
 log = logging.getLogger(__name__)
 MAX_BODY = 256 * 1024
 KINDS = {"ring": "ringing", "answer": "answered", "end": "ended"}
+DIRECTIONS = ("in", "out")
+REASONS = ("", "cancel", "bye", "rejected", "failed", "elsewhere")
 
 
 class LocalApi(threading.Thread):
@@ -71,8 +74,12 @@ class LocalApi(threading.Thread):
                     kind = KINDS.get(q.get("type", ""))
                     if not kind:
                         return self._send(400, {"error": "type must be ring|answer|end"})
+                    direction, reason = q.get("dir", "in"), q.get("reason", "")
+                    if direction not in DIRECTIONS or reason not in REASONS:
+                        return self._send(400, {"error": "dir must be in|out, reason one of " + "|".join(REASONS[1:])})
                     number = normalize_number(q.get("number", ""))
-                    emit_event(CallEvent(kind, q.get("id") or number or "http", number, "http"))
+                    emit_event(CallEvent(kind, q.get("id") or number or "http", number, "http", direction,
+                                         reason if kind == "ended" else ""))
                     return self._send(204)
                 self._send(404, {"error": "not found"})
 

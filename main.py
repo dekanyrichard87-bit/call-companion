@@ -54,14 +54,6 @@ def make_icon() -> QIcon:
     return QIcon(pm)
 
 
-def _clean_user_name(value) -> str | None:
-    """Display name pushed by the extension: plain text, 2-60 chars, no control characters."""
-    if not isinstance(value, str):
-        return None
-    value = " ".join("".join(ch for ch in value if ch.isprintable()).split())
-    return value if 2 <= len(value) <= 60 else None
-
-
 class Controller(QObject):
     event_sig = Signal(object)          # CallEvent (from detector / local API threads)
     lookup_sig = Signal(str, object)    # call_id, CallerInfo
@@ -80,6 +72,8 @@ class Controller(QObject):
         self.pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="crm")
         self.overlay: CallOverlay | None = None
         self.current_id: str | None = None
+        self.missed: dict[str, CallOverlay] = {}   # call id -> missed-call card (stays until the user closes it)
+        self._calls: dict[str, dict] = {}          # call id -> {"dir", "answered", "when"} while the call is live
         self.services = []
         self.ext_seen = False
         self.session_state = None
@@ -152,11 +146,6 @@ class Controller(QObject):
         ua = payload.get("userAgent")
         self.ext_seen = True
         self.ext_last = time.time()
-        name = _clean_user_name(payload.get("userName"))
-        if name:
-            self.status.set_user_name(name)
-        elif not cookies:                     # logged out in Chrome: drop the greeting name
-            self.status.set_user_name(None)
         self.status.set_extension(Health.OK, f"Utolsó szinkron {time.strftime('%H:%M:%S')} "
                                              f"({len(cookies)} süti)")
         changed = self.client.set_extension_session(cookies, ua if isinstance(ua, str) else "")
@@ -261,7 +250,8 @@ class Controller(QObject):
     # ---- overlay -----------------------------------------------------------------------
     def _ui_kwargs(self):
         ui = self.cfg["ui"]
-        return {"margin": ui["margin_px"], "answered_fade_ms": ui["answered_fade_ms"]}
+        return {"margin": ui["margin_px"], "answered_fade_ms": ui["answered_fade_ms"],
+                "close_missed_on_action": bool(ui.get("missed_close_on_action", True))}
 
     # CallOverlay deletes itself (deleteLater) after it has faded out, so self.overlay can point at a
     # dead Qt object. Never call methods on it directly: go through _live_overlay() / _drop_overlay().
@@ -281,6 +271,48 @@ class Controller(QObject):
     def _on_overlay_closed(self, ov):
         if self.overlay is ov:   # a late signal from an overlay that was already replaced is ignored
             self.overlay = None
+        for cid, card in list(self.missed.items()):
+            if card is ov:
+                del self.missed[cid]
+
+    def _overlay_for(self, call_id: str):
+        """The card that belongs to this call: the live card, or the missed-call card it turned into."""
+        if call_id == self.current_id:
+            return self._live_overlay()
+        ov = self.missed.get(call_id)
+        if ov is not None and not isValid(ov):
+            self.missed.pop(call_id, None)
+            return None
+        return ov
+
+    def _keep_missed(self, call_id: str, ov: CallOverlay, when: str):
+        """Turn the ringing card into a missed-call card that stays on screen until the user closes it.
+        A repeated missed call from the same number replaces the older card and raises its counter."""
+        count = 1
+        for cid, old in list(self.missed.items()):
+            if not isValid(old):
+                del self.missed[cid]
+            elif ov.number and old.number == ov.number:
+                count += old.missed_count
+                del self.missed[cid]
+                old.end()
+        self.overlay = None
+        self.missed[call_id] = ov
+        ov.set_missed(count, when)
+        limit = max(1, int(self.cfg["ui"].get("missed_max", 4)))     # the stack must fit on the screen
+        while len(self.missed) > limit:
+            old = self.missed.pop(next(iter(self.missed)))
+            if isValid(old):
+                old.end()
+
+    @staticmethod
+    def _outcome(meta: dict, ev: CallEvent):
+        """How a call that was never answered ended: missed / rejected / elsewhere / unanswered (we dialled)."""
+        if meta.get("answered"):
+            return None
+        if meta.get("dir") == "out":
+            return "unanswered"
+        return {"rejected": "rejected", "failed": "rejected", "elsewhere": "elsewhere"}.get(ev.reason, "missed")
 
     def _drop_overlay(self):
         ov, self.overlay = self.overlay, None
@@ -299,18 +331,26 @@ class Controller(QObject):
 
     # ---- call events -------------------------------------------------------------------
     def on_event(self, ev: CallEvent):
-        log.info("event: %s %s %s (%s)", ev.kind, ev.number, ev.call_id, ev.source)
+        tags = [ev.source] + (["out"] if ev.direction == "out" else []) + ([ev.reason] if ev.reason else [])
+        log.info("event: %s %s %s (%s)", ev.kind, ev.number, ev.call_id, ", ".join(tags))
         if ev.source not in ("sim", "http"):
             self.bria_last_event = time.strftime("%H:%M:%S")
+        outcome, meta = None, self._calls.get(ev.call_id) or {}
         if ev.kind == "answered":
+            meta["answered"] = True
             self.status.call_answered(ev.call_id)
         elif ev.kind == "ended":
-            self.status.call_ended(ev.call_id)
+            meta = self._calls.pop(ev.call_id, None) or {"dir": ev.direction}
+            outcome = self._outcome(meta, ev)
+            self.status.call_ended(ev.call_id, outcome=outcome)
         if ev.kind == "ringing":
-            self.status.call_ringing(ev.call_id, ev.number)
+            self._calls[ev.call_id] = {"dir": ev.direction, "answered": False, "when": time.strftime("%H:%M")}
+            while len(self._calls) > 50:                 # calls whose end was never seen
+                self._calls.pop(next(iter(self._calls)))
+            self.status.call_ringing(ev.call_id, ev.number, ev.direction)
             self._drop_overlay()
             self.current_id = ev.call_id
-            self._new_overlay().show_ringing(ev.number)    # immediate: number only
+            self._new_overlay().show_ringing(ev.number, ev.direction)    # immediate: number only
             fut = self.pool.submit(self._safe_lookup, ev.number)
             fut.add_done_callback(lambda f, cid=ev.call_id: self.lookup_sig.emit(cid, f.result()))
         elif ev.call_id == self.current_id:
@@ -320,8 +360,11 @@ class Controller(QObject):
                     ov.set_answered()
             elif ev.kind == "ended":
                 if ov:
-                    ov.end()
-                self.current_id = None   # reset even if the card already faded out (answered view)
+                    if outcome == "missed" and self.cfg["ui"].get("missed_persistent", True):
+                        self._keep_missed(ev.call_id, ov, meta.get("when", ""))
+                    else:
+                        ov.end()
+                self.current_id = None   # reset even if the card already faded out
 
     def _safe_lookup(self, number):
         try:
@@ -334,13 +377,12 @@ class Controller(QObject):
         state = "found" if info.found else ("failed" if info.error else "unknown")
         self.status.call_resolved(call_id, info.name if info.found else None,
                                   info.profile_url or None, state, info.error, info.elapsed_ms)
-        ov = self._live_overlay()
-        if call_id == self.current_id and ov:
+        ov = self._overlay_for(call_id)
+        if ov:
             ov.set_caller(info)
         # Stage 2: the name is already on the card. Fetch the company in the background (optional, slower);
-        # it pops in on the third line when it arrives and is dropped if the call has moved on.
-        if (call_id == self.current_id and info.found and not info.company
-                and self.client.company_enabled()):
+        # it pops in on the second line when it arrives and is dropped if the call has moved on.
+        if (ov and info.found and not info.company and self.client.company_enabled()):
             try:
                 self.pool.submit(self._company_job, call_id, info)
             except RuntimeError:            # pool already shut down (app is quitting)
@@ -356,23 +398,30 @@ class Controller(QObject):
             self.company_sig.emit(call_id, company)
 
     def on_company(self, call_id: str, company: str):
-        ov = self._live_overlay()
-        if call_id == self.current_id and ov:
+        ov = self._overlay_for(call_id)
+        if ov:
             ov.set_company(company)
 
 
 SIM_SCENARIOS = {                      # (delay in ms, event kind)
-    "answered": [(0, "ringing"), (5000, "answered"), (9000, "ended")],
+    "answered": [(0, "ringing"), (4000, "answered"), (24000, "ended")],      # 20 s of talk: the counter is visible
     "missed":   [(0, "ringing"), (6000, "ended")],
     "long":     [(0, "ringing"), (15000, "ended")],
+    "outgoing": [(0, "ringing"), (4000, "answered"), (20000, "ended")],      # we dial, they answer after 4 s
+    "outgoing_unanswered": [(0, "ringing"), (8000, "ended")],
 }
 
 
 def simulate(ctl: Controller, raw_number: str, scenario: str = "answered"):
     n = normalize_number(raw_number)
     cid = f"sim-{n}-{int(time.time() * 1000)}"       # unique per run, so repeats are separate log rows
+    direction = "out" if scenario.startswith("outgoing") else "in"
+    answered = False
     for delay, kind in SIM_SCENARIOS.get(scenario, SIM_SCENARIOS["answered"]):
-        QTimer.singleShot(delay, lambda kind=kind: ctl.event_sig.emit(CallEvent(kind, cid, n, "sim")))
+        answered = answered or kind == "answered"
+        reason = ("bye" if answered else "cancel") if kind == "ended" else ""
+        QTimer.singleShot(delay, lambda kind=kind, reason=reason: ctl.event_sig.emit(
+            CallEvent(kind, cid, n, "sim", direction, reason)))
 
 
 def main():
@@ -433,6 +482,7 @@ def main():
     open_act.setFont(bold)
     menu.addSeparator()
     menu.addAction("Test incoming call").triggered.connect(lambda: simulate(ctl, "+36301234567"))
+    menu.addAction("Test outgoing call").triggered.connect(lambda: simulate(ctl, "+36301234567", "outgoing"))
     menu.addAction("Re-check MiniCRM session").triggered.connect(ctl.check_session)
     menu.addSeparator()
     menu.addAction("Quit").triggered.connect(lambda: (win.prepare_quit(), ctl.stop(), app.quit()))

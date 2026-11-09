@@ -14,7 +14,6 @@ Run `python status_window.py` for a standalone preview with sample data.
 """
 from __future__ import annotations
 
-import html
 import logging
 import os
 import sys
@@ -51,9 +50,10 @@ HEALTH_COLOR = {Health.OK: GREEN, Health.WARN: YELLOW,
                 Health.ERROR: RED, Health.UNKNOWN: SUBTEXT}
 
 STATUS_HU = {"ringing": "Csörög", "answered": "Fogadva", "ended": "Befejezve",
-             "missed": "Nem fogadott", "rejected": "Elutasítva"}
+             "missed": "Nem fogadott", "rejected": "Elutasítva",
+             "unanswered": "Nem fogadták", "elsewhere": "Máshol fogadták"}
 STATUS_COLOR = {"ringing": BLUE, "answered": GREEN, "ended": SUBTEXT,
-                "missed": RED, "rejected": YELLOW}
+                "missed": RED, "rejected": YELLOW, "unanswered": SUBTEXT, "elsewhere": SUBTEXT}
 
 
 @dataclass
@@ -67,12 +67,13 @@ class CallRecord:
     call_id: str
     number: str
     started: datetime
-    status: str = "ringing"          # ringing / answered / ended / missed / rejected
+    status: str = "ringing"          # ringing / answered / ended / missed / rejected / unanswered / elsewhere
     name: str | None = None
     lookup: str = "pending"          # pending / found / unknown / failed
     detail: str = ""
     profile_url: str | None = None
     elapsed_ms: int = 0
+    direction: str = "in"            # "in" | "out" (outgoing calls are shown with an arrow)
 
 
 class StatusModel(QObject):
@@ -85,7 +86,6 @@ class StatusModel(QObject):
 
     def __init__(self) -> None:
         super().__init__()
-        self.user_name: str | None = None
         self.minicrm = HealthItem()
         self.bria = HealthItem()
         self.extension = HealthItem()
@@ -93,12 +93,6 @@ class StatusModel(QObject):
         self.calls: list[CallRecord] = []
 
     # -- health ---------------------------------------------------------
-    def set_user_name(self, name: str | None) -> None:
-        name = (name or "").strip() or None
-        if name != self.user_name:
-            self.user_name = name
-            self.changed.emit()
-
     def _set_health(self, attr: str, state: Health, text: str) -> None:
         new = HealthItem(state, text)
         if getattr(self, attr) != new:
@@ -121,10 +115,10 @@ class StatusModel(QObject):
     def _find(self, call_id: str) -> CallRecord | None:
         return next((c for c in self.calls if c.call_id == call_id), None)
 
-    def call_ringing(self, call_id: str, number: str) -> None:
+    def call_ringing(self, call_id: str, number: str, direction: str = "in") -> None:
         if self._find(call_id):
             return
-        self.calls.insert(0, CallRecord(call_id, number, datetime.now()))
+        self.calls.insert(0, CallRecord(call_id, number, datetime.now(), direction=direction))
         del self.calls[self.MAX_CALLS:]
         self.changed.emit()
 
@@ -143,12 +137,14 @@ class StatusModel(QObject):
             rec.status = "answered"
             self.changed.emit()
 
-    def call_ended(self, call_id: str, rejected: bool = False) -> None:
+    def call_ended(self, call_id: str, rejected: bool = False, outcome: str | None = None) -> None:
+        """`outcome` (missed / rejected / unanswered / elsewhere) names how a call that was never answered
+        ended; without it the old rule applies (rejected or missed)."""
         rec = self._find(call_id)
         if not rec:
             return
-        if rec.status == "ringing":          # never answered -> missed / rejected
-            rec.status = "rejected" if rejected else "missed"
+        if rec.status == "ringing":          # never answered -> missed / rejected / ...
+            rec.status = outcome or ("rejected" if rejected else "missed")
         elif rec.status == "answered":
             rec.status = "ended"
         self.changed.emit()
@@ -179,7 +175,7 @@ RECHECK_TIMEOUT_MS = 8000
 
 class StatusWindow(QWidget):
     recheck_requested = Signal()
-    simulate_requested = Signal(str, str)     # number, scenario (missed / answered / long)
+    simulate_requested = Signal(str, str)     # number, scenario (missed / answered / long / outgoing / outgoing_unanswered)
 
     def __init__(self, model: StatusModel, data_dir: str | None = None) -> None:
         super().__init__()
@@ -260,8 +256,10 @@ class StatusWindow(QWidget):
         self.sim_number.setPlaceholderText("pl. 06301234567 vagy +36301234567")
         self.sim_scenario = QComboBox()
         self.sim_scenario.addItem("Nem fogadott (6 mp)", "missed")
-        self.sim_scenario.addItem("Fogadott (4 mp után)", "answered")
+        self.sim_scenario.addItem("Fogadott (4 mp után, 20 mp hívás)", "answered")
         self.sim_scenario.addItem("Hosszú csörgés (15 mp)", "long")
+        self.sim_scenario.addItem("Kimenő hívás (4 mp után fogadják)", "outgoing")
+        self.sim_scenario.addItem("Kimenő, nem fogadják (8 mp)", "outgoing_unanswered")
         self.sim_button = QPushButton("Szimulálás", objectName="primary")
         self.sim_button.clicked.connect(self._simulate)
         self.sim_number.returnPressed.connect(self._simulate)
@@ -355,15 +353,8 @@ class StatusWindow(QWidget):
     # ------------------------------------------------------------ refresh --
     def refresh(self) -> None:
         m = self.model
-        # greeting
-        who = f", {html.escape(m.user_name)}" if m.user_name else ""
-        mc = m.minicrm
-        word = {Health.OK: "Aktív", Health.WARN: "Figyelmeztetés",
-                Health.ERROR: "Bejelentkezés szükséges",
-                Health.UNKNOWN: "Ellenőrzés…"}[mc.state]
-        self.greeting.setText(
-            f"Üdvözöljük{who}! <span style='color:{SUBTEXT}'>•</span> "
-            f"<span style='color:{HEALTH_COLOR[mc.state]}'>MiniCRM: {word}</span>")
+        # header: static text; the health of each part is shown in the rows below
+        self.greeting.setText("Call Companion Aktív")
 
         # health rows
         for key, item in (("bria", m.bria), ("minicrm", m.minicrm),
@@ -388,7 +379,8 @@ class StatusWindow(QWidget):
                 name, name_color = f"Keresés sikertelen{': ' + c.detail if c.detail else ''}", YELLOW
             else:
                 name, name_color = "Ismeretlen hívó", SUBTEXT
-            cells = (stamp, c.number, name, STATUS_HU.get(c.status, c.status))
+            number = ("↗ " if c.direction == "out" else "") + c.number
+            cells = (stamp, number, name, STATUS_HU.get(c.status, c.status))
             colors = (SUBTEXT, TEXT, name_color, STATUS_COLOR.get(c.status, TEXT))
             for col, (txt, colr) in enumerate(zip(cells, colors)):
                 it = QTableWidgetItem(txt)
@@ -493,7 +485,6 @@ def _demo() -> int:
     model = StatusModel()
     win = StatusWindow(model)
     win.prepare_quit()  # let the demo quit
-    model.set_user_name("Dékány Richárd")
     model.set_minicrm(Health.OK, "Bejelentkezve, a munkamenet érvényes")
     model.set_bria(Health.OK, "Log.txt figyelése, utolsó esemény 08:57:12")
     model.set_extension(Health.OK, "Utolsó szinkron 08:58 (14 süti)")

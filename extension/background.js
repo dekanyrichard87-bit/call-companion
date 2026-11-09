@@ -1,6 +1,8 @@
 // Call Companion – background service worker (Manifest V3)
-// Pushes the MiniCRM session cookies (+ the logged-in user's name) to the local app.
-// If the app is not reachable (not started yet, restarting) it keeps retrying every 15-30 s.
+// Pushes the MiniCRM session cookies to the local app.
+// If the app is not reachable (not started yet, restarting) it retries every 2 s for the first 2 minutes
+// (so the session arrives within seconds of the app starting), then every 15-30 s via an alarm; a content
+// script on an open MiniCRM tab additionally "pokes" this worker every 5 s while the app is not known to be up.
 
 const APP_URL = "http://127.0.0.1:48653";      // must match config.json -> local_api host/port
 const MINICRM_URL = "https://r3.minicrm.hu/";
@@ -9,19 +11,18 @@ const RETRY_MAX_S = 30;                         // (Chrome clamps alarms of pack
 const HEARTBEAT_MIN = 5;                        // periodic re-push; the app flags the extension as stale after 12 min
 const COOKIE_DEBOUNCE_MS = 1500;
 const REQUEST_TIMEOUT_MS = 4000;
+const FAST_RETRY_MS = 2000;                     // quick retries right after a failed push ...
+const FAST_WINDOW_MS = 120000;                  // ... for this long, then only the alarm (and pokes) keep trying
 
 let inFlight = null;       // promise of the push in progress
 let queuedReason = null;   // a push was requested while another was running
 let debounceTimer = null;
+let appUp = null;          // null = unknown yet, true = last push worked, false = last push failed
+let fastLoop = false;      // a quick-retry loop is running
 
 async function readCookies() {
   const all = await chrome.cookies.getAll({ url: MINICRM_URL });
   return all.map(c => ({ name: c.name, value: c.value, domain: c.domain, path: c.path, secure: c.secure }));
-}
-
-async function getUserName() {
-  const { userName = "" } = await chrome.storage.local.get("userName");
-  return userName;
 }
 
 async function scheduleRetry() {
@@ -29,13 +30,29 @@ async function scheduleRetry() {
   await chrome.alarms.create("retry", { delayInMinutes: delayS / 60 });
 }
 
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Quick retries after a failed push. Any extension API call resets the worker's idle timer, so the worker
+// stays alive while this loop runs. Not started for the alarm's own retries (no endless 2 s polling when the
+// app has simply been quit).
+async function fastRetry() {
+  if (fastLoop) return;
+  fastLoop = true;
+  const until = Date.now() + FAST_WINDOW_MS;
+  try {
+    while (Date.now() < until) {
+      await sleep(FAST_RETRY_MS);
+      await chrome.runtime.getPlatformInfo();
+      if (await pushSession("retry-fast")) return;
+    }
+  } finally {
+    fastLoop = false;
+  }
+}
+
 async function doPush(reason) {
-  const body = JSON.stringify({
-    reason,
-    cookies: await readCookies(),
-    userAgent: navigator.userAgent,
-    userName: await getUserName(),
-  });
+  const cookies = await readCookies();
+  const body = JSON.stringify({ reason, cookies, userAgent: navigator.userAgent });
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS);
   try {
@@ -62,11 +79,16 @@ function pushSession(reason) {
     try {
       await doPush(reason);
       ok = true;
+      appUp = true;
       await chrome.alarms.clear("retry");
       console.log(`[CallCompanion] pushed session (${reason})`);
     } catch (e) {
-      console.warn(`[CallCompanion] app not reachable (${reason}): ${e.message || e} - retrying`);
+      appUp = false;
+      if (reason !== "poke" && reason !== "retry-fast") {       // those two repeat every few seconds: stay quiet
+        console.warn(`[CallCompanion] app not reachable (${reason}): ${e.message || e} - retrying`);
+      }
       await scheduleRetry();
+      if (!["retry", "retry-fast", "poke"].includes(reason)) fastRetry();
     } finally {
       inFlight = null;
     }
@@ -100,14 +122,11 @@ chrome.cookies.onChanged.addListener(change => {
   debounceTimer = setTimeout(() => pushSession("cookies"), COOKIE_DEBOUNCE_MS);
 });
 
-// The content script reports the user's name read from the MiniCRM page.
+// The content script on an open MiniCRM tab pokes this worker every few seconds (content.js): while the app is
+// not known to be up, a poke triggers an immediate push (and keeps the worker alive).
 chrome.runtime.onMessage.addListener((msg, sender) => {
-  if (sender.id !== chrome.runtime.id || !msg || msg.type !== "userName") return;
-  if (typeof msg.name !== "string") return;
-  chrome.storage.local.get("userName").then(({ userName }) => {
-    if (userName === msg.name) return;
-    chrome.storage.local.set({ userName: msg.name }).then(() => pushSession("user"));
-  });
+  if (sender.id !== chrome.runtime.id || !msg || msg.type !== "poke") return;
+  if (appUp !== true && !inFlight && !fastLoop) pushSession("poke");
 });
 
 ensureHeartbeat();   // service worker (re)started for any reason: make sure the heartbeat exists

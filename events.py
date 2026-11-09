@@ -5,10 +5,12 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class CallEvent:
-    kind: str          # "ringing" | "answered" | "ended"
+    kind: str          # "ringing" | "answered" | "ended"   ("ringing" also means "dialling" when direction is "out")
     call_id: str
-    number: str = ""   # normalized
+    number: str = ""   # normalized: the CALLER for direction "in", the DIALLED number for "out"
     source: str = ""
+    direction: str = "in"   # "in" | "out"
+    reason: str = ""        # only on "ended": "cancel" | "bye" | "rejected" | "failed" | "elsewhere" | "" (unknown)
 
 
 def normalize_number(raw: str) -> str:

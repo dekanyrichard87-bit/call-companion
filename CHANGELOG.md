@@ -3,6 +3,79 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [0.4.0-beta] - 2026-11-09
+
+Call life-cycle release: the card now follows the whole call, missed calls are not lost, outgoing calls are covered,
+and the Chrome extension finds the app faster after a start.
+
+### Added
+- **Call duration counter**: an answered call keeps its card open and shows a live counter in the header
+  (`00:15`, `01:42`, `1:02:03`). The card shows name, company, number and the buttons during the call and fades out
+  when the call ends. A company that arrives during the call is shown.
+- **Persistent missed-call cards**: a call that the caller cancels before you answer turns its card into a
+  **MISSED CALL · hh:mm** card that stays until you close it (**✕**) or open the contact / search Google (**Copy** keeps
+  it). Several cards are stacked in the bottom-right corner: the live call at the bottom, missed calls above it, newest
+  nearest. A repeated missed call from the same number replaces the older card and counts up (`×2`). A lookup or
+  company that arrives after the caller hung up still fills the card. Not counted as missed: calls you declined,
+  calls answered on another phone (`Reason: ... completed elsewhere` on the CANCEL) and failed calls.
+- **Outgoing calls**: the detector reports an outgoing INVITE (the number comes from its `To` header; 401/407 challenges
+  are ignored so the card does not flicker) and the controller shows the same card with **OUTGOING CALL**, the MiniCRM
+  lookup (name and company) for the dialled number, the duration counter once the other side answers, and a fade-out at
+  the end. Unanswered outgoing calls never become missed-call cards. The status window's call table marks them with an
+  arrow and the outcome *Nem fogadták* (not answered).
+- **Faster extension sync after a start** (`extension/background.js`, `content.js`): after a failed push the extension
+  retries every 2 s for 2 minutes instead of waiting for the 30 s alarm, and the content script on an open MiniCRM tab
+  pokes the worker every 5 s while the app is not known to be up. The alarm retry stays as the fallback. The push
+  reason shows in the log: `extension push (retry-fast|poke): N cookies`.
+- `CallEvent` has two new optional fields: `direction` (`"in"` default, `"out"`) and `reason` (on `ended`: `cancel`,
+  `bye`, `rejected`, `failed`, `elsewhere`). `StatusModel.call_ringing(call_id, number, direction="in")` and
+  `StatusModel.call_ended(call_id, rejected=False, outcome=None)` got optional parameters; `CallOverlay.show_ringing`
+  takes `direction`, and `CallOverlay` has `set_missed()`, `elapsed_s()` and the `number`, `is_missed`,
+  `missed_count` properties. `BriaLogDetector.flush_idle()` reports a CANCEL that ends the log.
+- Local API: `/event?...&dir=out` and `&reason=...` (see the README). Simulator scenarios *Kimenő hívás* and *Kimenő,
+  nem fogadják*, and the tray entry **Test outgoing call**.
+- New optional `ui` keys, read by `main.py` (not added to `config.py`): `missed_persistent` (default `true`),
+  `missed_max` (default `4`) and `missed_close_on_action` (default `true`).
+
+- **Bria log path auto-detection** (`config.py`, `detectors.py`): without an explicit path the log is searched under
+  `%APPDATA%` with wildcards for the user-specific profile folder and the most recently written file is tailed.
+  New optional keys under `detectors.bria_log`: `log_path` (exact file or list; wins over any search; empty = auto) and
+  `log_globs_fallback` (default `...\*\*\Diagnostic Log\*.log` and `...\*\*\Logs\*.log`, used only while `log_globs`
+  matches no file; logged as a warning once). `log_globs` and its default are unchanged. `%APPDATA%` falls back to
+  `<home>\AppData\Roaming` when the variable is missing. The fallback layouts are not verified against a real Bria.
+- **Startup-folder autostart** (`install.ps1`, `uninstall.ps1`): `install.ps1` creates `Call Companion.lnk` in the
+  user's Startup folder, removes an older `Run` registry entry (no double start) and prints a deployment check
+  (program, shortcut, no fixed paths in `config.json`, Bria log found). `uninstall.ps1` removes the shortcut too.
+  `--install-autostart` / `--remove-autostart` (registry `Run` key) are unchanged. Not run on a real Windows PC yet.
+
+### Removed
+- **Logged-in user name** (introduced in 0.3.0-beta): identifying the logged-in MiniCRM user per workstation turned out
+  to be unreliable and brings nothing to the call card. Gone: the `Rpc/Profile/<id>` request, its cache and the config
+  keys `user_id`, `user_request`, `user_name_path` and `user_lookup` (`crm.py`, `main.py`); `StatusModel.set_user_name` /
+  `user_name` (`status_window.py`), whose header is now the static text "Call Companion Aktív" (the MiniCRM state stays in its row); the profile
+  page scraping, `#Profile` hash detection, avatar scan and `webRequest` capture in the extension; the `userName`,
+  `userId` and `userIdCandidates` fields of the extension push (an older extension that still sends them is
+  harmless, the app ignores them); the log lines `user id=...` and `session cookie names`. `local_api.py` needed no
+  change. A leftover `user_id` in an existing `config.json` is ignored.
+
+### Changed
+- An answered call no longer shrinks to a compact view and fades after 2.5 s. `ui.answered_fade_ms` is therefore **no
+  longer used** (still accepted in `config.json`).
+- The simulator's *answered* scenario now lasts 20 s of talk time (was 4 s) so the counter is visible; the missed
+  scenario ends with a CANCEL and leaves a missed-call card.
+- A CANCEL is reported when its headers are complete (blank line, next message, or 0.2 s of quiet), so a `Reason`
+  header after the Call-ID can be read.
+- Extension version `0.4.0` (was `0.3.0`); reload the extension in `chrome://extensions` after updating. Its permissions shrink to `cookies` and `alarms`
+  (`storage` is no longer needed).
+
+### Known issues
+- Outgoing-call detection and the "answered elsewhere" rule were built from the SIP standard and the log markers
+  already seen, not from a captured outgoing call or a ring-group call. Check with `--probe-bria` (README, limits).
+- Only one live call card at a time: a second call replaces the first one's card; missed-call cards are kept.
+- If the hang-up of an answered call is missing from the Bria log, the counter keeps running until you close the card.
+- The extension still finds a late-starting app only within 2 minutes (every 2 s), then every 5 s while a MiniCRM tab is
+  open, otherwise at the 30 s alarm.
+
 ## [0.3.1-beta] - 2026-11-09
 
 Callers with many deal cards in MiniCRM now resolve correctly, the card shows the caller's **company**, and the lookup

@@ -50,11 +50,19 @@ DEFAULTS = {
     "detectors": {
         "bria_log": {
             "enabled": True,
+            # Optional explicit log file (or list of files). When set, nothing is searched. Leave empty: the log is
+            # found by itself under %APPDATA% (log_globs, then log_globs_fallback). Environment variables are expanded.
+            "log_path": "",
             "log_globs": [
                 # live log: ...\Bria Enterprise\<version>\<profile>\Logs\Log.txt, e.g.
                 # ...\6.0\default_user\Logs\Log.txt and ...\6.0\104@dekorosmuvekbundle.hu\Logs\Log.txt.
                 # The detector tails whichever of them was written to most recently.
                 "%APPDATA%\\CounterPath Corporation\\Bria Enterprise\\*\\*\\Logs\\Log.txt",
+            ],
+            # Only used while log_globs matches no file at all (other Bria layouts); the newest match wins here too.
+            "log_globs_fallback": [
+                "%APPDATA%\\CounterPath Corporation\\Bria Enterprise\\*\\*\\Diagnostic Log\\*.log",
+                "%APPDATA%\\CounterPath Corporation\\Bria Enterprise\\*\\*\\Logs\\*.log",
             ],
             # Bria Enterprise 6.x marks the SIP direction on the line before each message:
             #   "RESIP:TRANSPORT | ... incoming from: [ V4 ip:port UDP ... ]"  /  "... Transmitting to [ ... ]"
