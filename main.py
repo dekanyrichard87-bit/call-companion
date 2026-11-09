@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from shiboken6 import isValid   # ships with PySide6: False once the C++ side of a widget is deleted
 
 import config
+import updater
 from crm import CallerInfo, MiniCrmClient
 from detectors import BriaLogDetector
 from events import CallEvent, normalize_number
@@ -26,6 +27,8 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
 def set_autostart(enable: bool):
+    """Per-user Run registry entry - for a source checkout only. The installer (installer.iss) uses a Startup-folder
+    shortcut instead and removes this entry, so an installed copy is never started twice."""
     import winreg
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
         if enable:
@@ -43,7 +46,12 @@ def set_autostart(enable: bool):
 
 
 def make_icon() -> QIcon:
-    pm = QPixmap(64, 64)
+    ico = config.resource_path("assets/app.ico")          # bundled by callcompanion.spec
+    if ico.exists():
+        icon = QIcon(str(ico))
+        if not icon.isNull():
+            return icon
+    pm = QPixmap(64, 64)                                   # fallback: plain dot (should not happen)
     pm.fill(QColor(0, 0, 0, 0))
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -92,6 +100,13 @@ class Controller(QObject):
         self.company_sig.connect(self.on_company)
 
     # ---- lifecycle ---------------------------------------------------------------------
+    def is_busy(self) -> bool:
+        """True while a call is ringing / running or a missed-call card is still on screen.
+        The auto-updater waits for this to become False before it restarts the app."""
+        if self.current_id is not None or self._calls:
+            return True
+        return any(isValid(card) for card in self.missed.values())
+
     def start_services(self):
         la = self.cfg["local_api"]
         if la["enabled"]:
@@ -433,6 +448,10 @@ def main():
     ap.add_argument("--version", action="store_true", help="print the version and exit")
     ap.add_argument("--install-autostart", action="store_true")
     ap.add_argument("--remove-autostart", action="store_true")
+    ap.add_argument("--check-update", action="store_true",
+                    help="query GitHub Releases, print the result to app.log / console and exit")
+    ap.add_argument("--after-install", action="store_true",
+                    help="started by the installer: show a short tray message")
     args = ap.parse_args()
 
     if args.version:
@@ -455,6 +474,12 @@ def main():
     logging.basicConfig(level=logging.INFO, handlers=handlers,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
+    if args.check_update:
+        result = updater.check_once(config.load())
+        log.info("%s", result)
+        print(result)
+        return
+
     log.info("Call Companion %s starting", __version__)
     lock = QLockFile(str(config.data_dir() / "app.lock"))   # single instance (autostart + manual start)
     if not lock.tryLock(200):
@@ -467,14 +492,26 @@ def main():
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+    icon = make_icon()
+    app.setWindowIcon(icon)
     ctl = Controller(cfg)
     win = StatusWindow(ctl.status, data_dir=str(config.data_dir()))
     win.recheck_requested.connect(ctl.check_session)
     win.simulate_requested.connect(lambda number, scenario: simulate(ctl, number, scenario))
 
-    tray = QSystemTrayIcon(make_icon(), app)
+    def quit_app():
+        win.prepare_quit()
+        ctl.stop()
+        app.quit()
+
+    updates = updater.UpdateManager(cfg, is_busy=ctl.is_busy, quit_app=quit_app, parent=app)
+
+    tray = QSystemTrayIcon(icon, app)
     tray.setToolTip("Call Companion")
     menu = QMenu()
+    menu.setToolTipsVisible(True)                     # "Check for updates" shows the last update state
+    ver_act = menu.addAction(f"Call Companion {__version__}")
+    ver_act.setEnabled(False)
     open_act = menu.addAction("Status window")
     open_act.triggered.connect(win.show_and_raise)
     bold = open_act.font()
@@ -484,17 +521,27 @@ def main():
     menu.addAction("Test incoming call").triggered.connect(lambda: simulate(ctl, "+36301234567"))
     menu.addAction("Test outgoing call").triggered.connect(lambda: simulate(ctl, "+36301234567", "outgoing"))
     menu.addAction("Re-check MiniCRM session").triggered.connect(ctl.check_session)
+    upd_act = menu.addAction("Check for updates")
+    upd_act.triggered.connect(lambda: updates.check(manual=True))
     menu.addSeparator()
-    menu.addAction("Quit").triggered.connect(lambda: (win.prepare_quit(), ctl.stop(), app.quit()))
+    menu.addAction("Quit").triggered.connect(quit_app)
+    menu.aboutToShow.connect(lambda: upd_act.setToolTip(updates.state_text))
     tray.setContextMenu(menu)
     ctl.status_sig.connect(tray.setToolTip)
     ctl.tray_msg_sig.connect(lambda t, m: tray.showMessage(
         t, m, QSystemTrayIcon.MessageIcon.Warning, 8000))
+    updates.message.connect(lambda t, m: tray.showMessage(
+        t, m, QSystemTrayIcon.MessageIcon.Information, 6000))
     attach_to_tray(tray, win)             # double-click the tray icon -> status window
     tray.show()
 
     ctl.start_services()
     ctl.check_session()
+    updates.start()
+    if args.after_install:
+        QTimer.singleShot(1_500, lambda: tray.showMessage(
+            "Call Companion", f"Version {__version__} is running. Double-click the tray icon for the status window.",
+            QSystemTrayIcon.MessageIcon.Information, 6000))
     if args.show:
         QTimer.singleShot(300, win.show_and_raise)
     if args.simulate:
