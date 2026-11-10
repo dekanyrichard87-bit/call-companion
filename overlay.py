@@ -1,4 +1,4 @@
-"""Frameless, always-on-top, dark glass-style call card in the bottom-right corner.
+"""Frameless, always-on-top, dark glass-style call card (bottom-right corner by default).
 
 Card text, top to bottom (see CallOverlay._lines):
     line 1  big, bold         caller's NAME (while the lookup runs: the number)
@@ -11,20 +11,36 @@ Card states (the status line in the header says which):
     ● IN CALL  mm:ss                    answered: stays open with a live duration counter until the call ends
     ● MISSED CALL [×N] · hh:mm          stays until the user closes it (✕) or uses MiniCRM / Google
 
-Several cards can be on screen at once. They are stacked in the bottom-right corner: the live call (or a notice)
-at the bottom, the missed-call cards above it, the newest missed call nearest to the bottom.
+Several cards can be on screen at once. They are stacked at the anchor: the live call (or a notice) nearest to it,
+the missed-call cards beyond it, the newest missed call nearest to the live call.
+
+Placement (v0.5.1, config "ui" block, read from config.load() on first use):
+    overlay_position   bottom_right | bottom_left | top_right | top_left   (corner of the usable screen area)
+    offset_x/offset_y  px added to the corner position (default offset_x = -380: clears Bria's incoming-call toast)
+    dock_to_bria       true = while Bria's toast is on screen, the cards sit directly left of it (bottoms aligned);
+                       found with one EnumWindows pass (visible + topmost + toast-sized + Bria process),
+                       re-checked every 300 ms only while a live call card is visible. Off by default.
 """
+import ctypes
 import itertools
+import logging
+import os
+import re
+import sys
 import time
+from ctypes import wintypes
 from urllib.parse import quote
 
-from PySide6.QtCore import QPropertyAnimation, QTimer, Qt, QUrl, Signal
+from PySide6.QtCore import QPropertyAnimation, QRect, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from shiboken6 import isValid   # ships with PySide6: False once the C++ side of a widget is deleted
 
+import config
 from crm import CallerInfo
+
+log = logging.getLogger("overlay")
 
 UNKNOWN_CALLER = "Ismeretlen hívó"
 
@@ -48,6 +64,153 @@ _STACK: list = []          # every CallOverlay that was placed; pruned when its 
 _SEQ = itertools.count(1)  # creation order, so the newest missed card can sit nearest to the bottom
 STACK_GAP = 10
 INCOMING_GREEN, OUTGOING_MAUVE, ANSWERED_BLUE, MISSED_RED = "#a6e3a1", "#cba6f7", "#89b4fa", "#f38ba8"
+
+
+# ---- placement: corner + offset, optional docking next to Bria's toast ---------------------------------------
+_POSITIONS = ("bottom_right", "bottom_left", "top_right", "top_left")
+_PLACEMENT = {
+    "position": "bottom_right",
+    "offset_x": -380,       # added to x: negative = to the left
+    "offset_y": 0,          # added to y: negative = up
+    "dock_to_bria": False,  # True = sit next to Bria's toast when one is on screen (offsets apply otherwise)
+    "bria_process_regex": r"(?i)bria",
+    "dock_gap_px": 12,
+}
+_CONFIGURED = False
+_DOCK_INTERVAL_MS = 300     # re-check only while a live call card is visible and docking is on
+_DOCK_TIMER = None
+_LAST_ANCHOR = object()     # last anchor that was logged (only state changes are logged)
+
+
+def configure_placement(ui: dict) -> None:
+    """Apply the "ui" config block. Idempotent and cheap; called automatically on first use."""
+    global _CONFIGURED
+    d = _PLACEMENT
+    pos = str(ui.get("overlay_position", d["position"])).strip().lower()
+    try:
+        d.update(
+            position=pos if pos in _POSITIONS else "bottom_right",
+            offset_x=int(ui.get("offset_x", d["offset_x"])),
+            offset_y=int(ui.get("offset_y", d["offset_y"])),
+            dock_to_bria=bool(ui.get("dock_to_bria", d["dock_to_bria"])),
+            bria_process_regex=str(ui.get("bria_process_regex") or d["bria_process_regex"]),
+            dock_gap_px=int(ui.get("dock_gap_px", d["dock_gap_px"])),
+        )
+    except (TypeError, ValueError):
+        log.warning("invalid overlay placement settings in config.json, using the defaults", exc_info=True)
+    _CONFIGURED = True
+    log.info("overlay placement: %s offset=(%d,%d) dock_to_bria=%s", d["position"], d["offset_x"],
+             d["offset_y"], d["dock_to_bria"])
+
+
+def _ensure_configured() -> None:
+    if _CONFIGURED:
+        return
+    try:
+        configure_placement(config.load().get("ui") or {})
+    except Exception:
+        log.warning("could not read the placement settings, using the defaults", exc_info=True)
+        globals()["_CONFIGURED"] = True
+
+
+if sys.platform == "win32":
+    _user32 = ctypes.WinDLL("user32", use_last_error=True)
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    _user32.EnumWindows.argtypes = [_WNDENUMPROC, wintypes.LPARAM]
+    _user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    _user32.IsIconic.argtypes = [wintypes.HWND]
+    _user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    _user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    _user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+    _user32.GetWindowLongW.restype = ctypes.c_long
+    _kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    _kernel32.OpenProcess.restype = wintypes.HANDLE
+    _kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                                     ctypes.POINTER(wintypes.DWORD)]
+    _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+_GWL_EXSTYLE, _WS_EX_TOPMOST, _PROCESS_QUERY_LIMITED_INFORMATION = -20, 0x0008, 0x1000
+_TOAST_MAX_W, _TOAST_MAX_H = 640, 420     # logical px: anything bigger is Bria's main window, not its toast
+
+
+def _exe_name(pid: int, cache: dict) -> str:
+    if pid in cache:
+        return cache[pid]
+    name = ""
+    h = _kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if h:
+        try:
+            buf = ctypes.create_unicode_buffer(520)
+            size = wintypes.DWORD(len(buf))
+            if _kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+                name = os.path.basename(buf.value)
+        finally:
+            _kernel32.CloseHandle(h)
+    cache[pid] = name
+    return name
+
+
+def find_bria_toast(screen):
+    """Bria's visible, always-on-top, toast-sized window on `screen` (QScreen), as a QRect in Qt logical
+    coordinates; the one nearest the bottom-right corner. None if none / not Windows / any error.
+    One EnumWindows pass, typically well under 2 ms. The px -> logical conversion assumes the primary screen
+    (origin 0,0), which is the screen the cards use."""
+    if sys.platform != "win32" or screen is None:
+        return None
+    try:
+        rx = re.compile(_PLACEMENT["bria_process_regex"])
+        dpr = screen.devicePixelRatio() or 1.0     # Qt 6 is per-monitor DPI aware: GetWindowRect = physical px
+        area = screen.geometry()
+        own_pid = os.getpid()
+        cache, hits = {}, []
+
+        def cb(hwnd, _lparam):
+            try:
+                if not _user32.IsWindowVisible(hwnd) or _user32.IsIconic(hwnd):
+                    return True
+                if not (_user32.GetWindowLongW(hwnd, _GWL_EXSTYLE) & _WS_EX_TOPMOST):
+                    return True
+                pid = wintypes.DWORD()
+                _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                if pid.value == own_pid or not rx.search(_exe_name(pid.value, cache)):
+                    return True
+                r = wintypes.RECT()
+                if not _user32.GetWindowRect(hwnd, ctypes.byref(r)):
+                    return True
+                q = QRect(round(r.left / dpr), round(r.top / dpr),
+                          round((r.right - r.left) / dpr), round((r.bottom - r.top) / dpr))
+                if 40 <= q.width() <= _TOAST_MAX_W and 30 <= q.height() <= _TOAST_MAX_H and area.intersects(q):
+                    hits.append(q)
+            except Exception:
+                pass
+            return True
+
+        proc = _WNDENUMPROC(cb)                  # keep a reference for the duration of the call
+        _user32.EnumWindows(proc, 0)
+        return max(hits, key=lambda q: q.right() + q.bottom()) if hits else None
+    except Exception:
+        log.debug("find_bria_toast failed", exc_info=True)
+        return None
+
+
+def _ensure_dock_timer():
+    global _DOCK_TIMER
+    if _DOCK_TIMER is None:
+        _DOCK_TIMER = QTimer()
+        _DOCK_TIMER.setInterval(_DOCK_INTERVAL_MS)
+        _DOCK_TIMER.timeout.connect(_dock_tick)
+    if not _DOCK_TIMER.isActive():
+        _DOCK_TIMER.start()
+
+
+def _dock_tick():
+    # Follows the toast while it appears / slides in / disappears (answer, hang-up). Stops by itself when no live
+    # call card is left, so missed-call cards that stay for hours cost nothing.
+    if not _PLACEMENT["dock_to_bria"] or not any(isValid(w) and w.isVisible() and w._rank == 0 for w in _STACK):
+        _DOCK_TIMER.stop()
+        return
+    CallOverlay._relayout()
 
 
 def format_duration(seconds: int) -> str:
@@ -148,22 +311,55 @@ class CallOverlay(QWidget):
         if not any(w is self for w in _STACK):
             _STACK.append(self)
         CallOverlay._relayout(self)
+        if _PLACEMENT["dock_to_bria"] and self._rank == 0:
+            _ensure_dock_timer()
 
     @staticmethod
     def _relayout(extra=None):
-        """Stack all visible cards in the bottom-right corner (above the taskbar): live call at the bottom,
-        missed cards above it, newest first. `extra` is a card that is placed just before it is shown."""
+        """Stack all visible cards: live call nearest the anchor, missed cards beyond it, newest first.
+        Anchor = Bria's toast (docked to its left edge, bottoms aligned) when dock_to_bria is on and a toast is
+        found; otherwise the configured corner of the usable screen area (excludes the taskbar) + offset_x/_y.
+        `extra` is a card that is placed just before it is shown."""
+        global _LAST_ANCHOR
+        _ensure_configured()
         _STACK[:] = [w for w in _STACK if isValid(w)]
         live = [w for w in _STACK if w is extra or w.isVisible()]
         if not live:
             return
         live.sort(key=lambda w: (w._rank, -w._seq))
-        screen = QGuiApplication.primaryScreen().availableGeometry()  # excludes taskbar
-        y = screen.bottom()
-        for w in live:
-            y -= w._margin if w is live[0] else STACK_GAP
-            y -= w.height()
-            w.move(screen.right() - w.width() - w._margin, y)
+        scr = QGuiApplication.primaryScreen()
+        area = scr.availableGeometry()
+        p, m, width = _PLACEMENT, live[0]._margin, CallOverlay.WIDTH
+
+        toast = find_bria_toast(scr) if p["dock_to_bria"] else None
+        anchor = toast.getRect() if toast is not None else p["position"]
+        if anchor != _LAST_ANCHOR:
+            log.info("overlay anchor: %s", f"Bria toast {anchor}" if toast is not None else anchor)
+            _LAST_ANCHOR = anchor
+        if toast is not None:
+            gap = p["dock_gap_px"]
+            if toast.left() - gap - width >= area.left():   # room on the left: side by side, bottoms aligned
+                x, edge, downward = toast.left() - gap - width, toast.bottom() + 1, False
+            else:                                           # no room: on top of the toast
+                x, edge, downward = toast.right() + 1 - width, toast.top() - gap, False
+        else:
+            pos = p["position"]
+            x = area.left() + m if pos.endswith("left") else area.right() + 1 - width - m
+            downward = pos.startswith("top")
+            edge = area.top() + m if downward else area.bottom() + 1 - m
+            x, edge = x + p["offset_x"], edge + p["offset_y"]
+
+        x = max(area.left(), min(x, area.right() + 1 - width))   # never off screen
+        y = edge
+        for i, w in enumerate(live):
+            h = w.height()
+            if downward:
+                y += STACK_GAP if i else 0
+                w.move(x, max(area.top(), min(y, area.bottom() + 1 - h)))
+                y += h
+            else:
+                y -= (STACK_GAP if i else 0) + h
+                w.move(x, max(area.top(), min(y, area.bottom() + 1 - h)))
 
     def _fade(self, to: float, ms: int, then=None):
         if self._anim:

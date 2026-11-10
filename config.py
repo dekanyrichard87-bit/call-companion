@@ -70,7 +70,17 @@ DEFAULTS = {
             "outgoing_regex": "(?i)Transmitting to",
         },
     },
-    "ui": {"answered_fade_ms": 2500, "margin_px": 16},
+    "ui": {
+        "answered_fade_ms": 2500,
+        "margin_px": 16,
+        # v0.5.1: where the call cards go (read by overlay.py)
+        "overlay_position": "bottom_right",   # bottom_right | bottom_left | top_right | top_left
+        "offset_x": -380,                     # px added to x (negative = left): clears Bria's incoming-call toast
+        "offset_y": 0,                        # px added to y (negative = up)
+        "dock_to_bria": False,                # True = sit left of Bria's toast when one is found (offsets otherwise)
+        "bria_process_regex": "(?i)bria",     # Bria's program file name
+        "dock_gap_px": 12,                    # gap between the toast and the docked cards
+    },
     # Auto-update from GitHub Releases (updater.py). Only an installed copy (installer.iss) updates itself.
     "update": {
         "enabled": True,
