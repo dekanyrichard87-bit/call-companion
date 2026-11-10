@@ -1,9 +1,10 @@
 # Call Companion
 
-**Version 0.5.0-beta** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
+**Version 0.5.1-beta** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
 
 Call Companion is a small tray application that watches the **Bria Enterprise** softphone and, the moment a
-call rings, shows a dark, frameless pop-up card in the bottom-right corner of the screen. The card shows the
+call rings, shows a dark, frameless pop-up card near the bottom-right corner of the screen, just left of Bria's own
+call notification. The card shows the
 caller's number immediately and, a moment later, the caller's **name from MiniCRM** and, a little later still, the
 caller's **company**, with one-click buttons to open the contact in MiniCRM, search the number on Google, or copy it.
 While you talk, the card stays open and counts the call duration; a **missed call** stays on screen until you close
@@ -210,6 +211,9 @@ The MiniCRM button keeps pointing at the profile of the shown name, even when th
 - **Call duration counter**: an answered call keeps its card open with a live `mm:ss` counter until the call ends.
 - **Persistent missed-call cards**: a missed call stays until you close it; stacked, counted per number, name and
   company filled in even if they arrive late (config: `ui.missed_persistent`, `ui.missed_max`, `ui.missed_close_on_action`).
+- **Clear of Bria's notification** (0.5.1): the cards sit 380 px left of the bottom-right corner, so Bria Enterprise's
+  incoming-call toast no longer covers them. Corner and offset are configurable (`ui.overlay_position`, `ui.offset_x`,
+  `ui.offset_y`); optional `ui.dock_to_bria` places the cards directly beside the toast.
 - **Outgoing calls**: the card and the MiniCRM lookup (name and company) also work for the number you dial from Bria.
 - **Faster start-up sync**: the Chrome extension retries every 2 s for 2 minutes after the app was not reachable, and a
   MiniCRM tab pokes it every 5 s, so the session usually arrives within seconds of the app starting.
@@ -258,6 +262,8 @@ The MiniCRM button keeps pointing at the profile of the shown name, even when th
 | **Outgoing calls are unverified against a real Bria log** | The outgoing INVITE layout (dialled number in the `To` header, 401/407 challenges) was built from the SIP standard and the `Transmitting to` marker, not from a captured call | Run `python main.py --probe-bria 90`, place an outgoing test call and check `Parser recognised ...: ['ringing','answered','ended']`; keep `bria_probe.txt` if not |
 | **"Answered elsewhere" is unverified** | A call picked up on another phone is told apart from a missed call by the `Reason: ... completed elsewhere` header of the CANCEL; whether your PBX sends it is not known | If such calls leave a missed-call card, send the CANCEL lines from `--probe-bria` |
 | **A lost hang-up leaves the in-call card open** | The card closes on the `BYE` found in the Bria log; if the log is rotated or the line is missed, the counter keeps running | Close it with **✕** |
+| **Bria docking is unverified** | `ui.dock_to_bria` finds Bria's toast as a visible, always-on-top, toast-sized window of a process named `bria`; this has not been checked against a real Bria Enterprise toast yet, so it is off by default | Run `bria_toast_probe.py` during a test call; if the toast shows `topmost=True` and is under 640×420, set `"dock_to_bria": true` in the personal `config.json` |
+| Cards follow the **primary screen** only | The cards and the Bria docking use the primary monitor | - |
 | Missed-call cards: at most 4 | The stack must fit on the screen | `ui.missed_max` |
 | Needs Bria **Log Level = Verbose** | At lower levels Bria writes no SIP messages | Help > Troubleshooting > Support. Verbose logs grow quickly. The app opens the log only for each read, so Bria can rotate or rename it; rotation has not been tested live |
 | **Status window position is best effort** | Windows 11 often reports no position for tray icons, so the window goes to the bottom-right of the usable area of the screen under the cursor (or the primary screen) rather than exactly at the icon | - |
@@ -512,10 +518,22 @@ set), `log_globs` (see above), `log_globs_fallback` (see above), `incoming_regex
 | Key | Default | Meaning |
 |---|---|---|
 | `margin_px` | `16` | Distance of the cards from the screen edge |
+| `overlay_position` | `"bottom_right"` | Corner of the usable screen area: `bottom_right`, `bottom_left`, `top_right`, `top_left` |
+| `offset_x` | `-380` | Pixels added to the horizontal position; negative = left. The default clears Bria's incoming-call toast |
+| `offset_y` | `0` | Pixels added to the vertical position; negative = up |
+| `dock_to_bria` | `false` | `true` = while Bria's toast is on screen, the cards sit directly left of it (bottoms aligned; on top of it when there is no room); otherwise the corner + offsets apply |
+| `bria_process_regex` | `"(?i)bria"` | Program file name of Bria, for `dock_to_bria` |
+| `dock_gap_px` | `12` | Gap between Bria's toast and the docked cards |
 | `answered_fade_ms` | `2500` | **No longer used** since 0.4.0 (an answered call keeps its card until the call ends); kept so existing `config.json` files stay valid |
 | `missed_persistent` | `true` (read by `main.py`, not in `config.py`) | `false` = missed calls fade out like before |
 | `missed_max` | `4` (read by `main.py`, not in `config.py`) | Missed-call cards kept at once; the oldest is closed beyond that |
 | `missed_close_on_action` | `true` (read by `main.py`, not in `config.py`) | `true` = opening the contact or the Google search closes a missed-call card; `false` = only **✕** closes it |
+
+Example, in `%LOCALAPPDATA%\CallCompanion\config.json` (kept by updates; restart the app after editing):
+
+```json
+{"ui": {"offset_x": -450}}
+```
 
 **`update`** (auto-update, `updater.py`)
 

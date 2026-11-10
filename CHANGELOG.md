@@ -3,6 +3,24 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [0.5.1-beta] - 2026-11-10
+
+Hotfix: Bria Enterprise's incoming-call toast covered the call card, because both appeared in the bottom-right corner.
+
+### Fixed
+- The call cards now sit 380 px left of the bottom-right corner by default, so Bria's toast no longer covers them and
+  Bria's answer / decline buttons stay free.
+
+### Added
+- `ui` settings: `overlay_position` (`bottom_right` / `bottom_left` / `top_right` / `top_left`), `offset_x`
+  (default `-380`) and `offset_y`. They can be changed per PC in `%LOCALAPPDATA%\CallCompanion\config.json`.
+- Optional docking next to Bria's toast (`ui.dock_to_bria`, off by default; `bria_process_regex`, `dock_gap_px`): the
+  toast is found with one window scan when a card is placed, and re-checked every 300 ms only while a live call card is
+  on screen. Not yet verified against a real Bria toast.
+
+### Changed
+- `overlay.py` reads its placement settings from `config.load()` on first use; `main.py` is unchanged.
+
 ## [0.5.0-beta] - 2026-11-09
 
 Deployment release: one setup `.exe` for a PC without Python, with autostart, an uninstaller and automatic updates
