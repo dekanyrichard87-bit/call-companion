@@ -74,7 +74,8 @@ class DevWindow(QWidget):
         self._rows: dict[str, QLabel] = {}
         self._dots: dict[str, QLabel] = {}
         for key, title in (("bria", "Bria naplófigyelés"), ("minicrm", "MiniCRM munkamenet"),
-                           ("extension", "Chrome bővítmény"), ("api", "Helyi API")):
+                           ("extension", "Chrome bővítmény"), ("api", "Helyi API"),
+                           ("bria_api", "Bria vezérlés (API)")):
             row = QHBoxLayout()
             dot = QLabel("●")
             dot.setFixedWidth(18)
@@ -97,7 +98,6 @@ class DevWindow(QWidget):
         self.bria_btn = QPushButton("Bria vezérlés ellenőrzése")
         self.bria_btn.setToolTip("Megkérdezi a Briát a futó hívásokról (Bria Desktop API).")
         self.bria_btn.clicked.connect(self.bria_api_check.emit)
-        self.bria_btn.setVisible(False)                # enabled in v0.8.0 (Bria control)
         upd = QPushButton("Frissítések keresése")
         upd.clicked.connect(self.check_updates.emit)
         checks.addWidget(self.recheck_btn)
@@ -203,7 +203,7 @@ class DevWindow(QWidget):
             return
         m = self.model
         for key, item in (("bria", m.bria), ("minicrm", m.minicrm), ("extension", m.extension),
-                          ("api", m.api)):
+                          ("api", m.api), ("bria_api", m.bria_api)):
             self._dots[key].setStyleSheet(f"color: {HEALTH_COLOR[item.state]}; font-size: 14px;")
             self._rows[key].setText(item.text)
 

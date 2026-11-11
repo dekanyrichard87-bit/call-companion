@@ -545,7 +545,6 @@ class MainWindow(QWidget):
         self.ext_btn = QPushButton("☎ Mellékek…")
         self.ext_btn.setToolTip("Belső mellékek és kollégák – ezekre lehet átkapcsolni a hívást a kártyáról.")
         self.ext_btn.clicked.connect(self.edit_extensions.emit)
-        self.ext_btn.setVisible(False)                 # enabled in v0.8.0 (Bria control)
         foot.addWidget(self.ext_btn)
         self.dev_btn = QPushButton("🛠 Fejlesztői eszközök")
         self.dev_btn.clicked.connect(self.open_dev_tools.emit)

@@ -14,7 +14,8 @@ Card states (v0.7.0; the header shows an animated icon and the state in Hungaria
     HÍVÁS BEFEJEZVE · mm:ss (etc.)  after the call ends (or after an action on a missed card) the card stays
                                     ui.end_linger_ms (default 3 s) with the outcome, then fades out; the timer pauses
                                     while the mouse is over the card
-Animations run on one 40 ms timer per card and only while it rings or a call is live.
+Animations run on one timer per card (40 ms while ringing, 66 ms during a call) and only while it rings or a call
+is live.
 
 Several cards can be on screen at once. They are stacked at the anchor: the live call (or a notice) nearest to it,
 the missed-call cards beyond it, the newest missed call nearest to the live call.
@@ -39,7 +40,7 @@ from urllib.parse import quote
 
 from PySide6.QtCore import QPointF, QPropertyAnimation, QRect, QRectF, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QPainter, QPen
-from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from shiboken6 import isValid   # ships with PySide6: False once the C++ side of a widget is deleted
 
@@ -62,6 +63,13 @@ QPushButton { background:rgba(255,255,255,20); border:none; border-radius:8px; c
 QPushButton:hover { background:rgba(255,255,255,42); }
 QPushButton:disabled { color:#6c7086; }
 QPushButton#done { background:rgba(166,227,161,55); color:#a6e3a1; }
+QPushButton#ctl { background:rgba(137,180,250,34); }
+QPushButton#ctl:hover { background:rgba(137,180,250,70); }
+QPushButton#ctl:checked { background:rgba(250,179,135,60); color:#fab387; }
+QPushButton#ext { background:rgba(203,166,247,26); text-align:left; padding:6px 9px; font-size:12px; }
+QPushButton#ext:hover { background:rgba(203,166,247,70); }
+#hint { font-size:11px; color:#f38ba8; }
+#empty { font-size:11px; color:#9399b2; }
 QPushButton#busy { color:#9399b2; }
 #close { background:transparent; font-size:14px; padding:2px 6px; }
 #close:hover { background:rgba(243,139,168,60); }
@@ -74,7 +82,8 @@ GLOW = 6                   # transparent margin around the card for the pulsing 
 STACK_GAP = 2              # gap between two card windows; the visible gap is STACK_GAP + 2 * GLOW
 INCOMING_GREEN, OUTGOING_MAUVE, ANSWERED_BLUE, MISSED_RED = "#a6e3a1", "#cba6f7", "#89b4fa", "#f38ba8"
 HOLD_PEACH, NOTICE_YELLOW, ENDED_GREY, MISSED_BURGUNDY = "#fab387", "#f9e2af", "#7f849c", "#8c2f45"
-ANIM_MS = 40               # 25 fps, only while a card rings or a call is live
+ANIM_MS = 40               # 25 fps, only while a card rings
+ANIM_CALL_MS = 66          # 15 fps for the in-call / hold icon
 
 
 # ---- placement: corner + offset, optional docking next to Bria's toast ---------------------------------------
@@ -318,6 +327,8 @@ BASE_BG = "#1e1e2e"
 
 class CallOverlay(QWidget):
     closed = Signal()
+    hold_requested = Signal(bool)            # v0.8.0: True = put on hold, False = take back
+    transfer_requested = Signal(str, str)    # v0.8.0: extension number, colleague name
     WIDTH = 340                       # visible card width
     OUTER = WIDTH + 2 * GLOW          # window width (card + glow margin)
     LINGER_DEFAULT_MS = 3000
@@ -348,6 +359,9 @@ class CallOverlay(QWidget):
         self._accent = INCOMING_GREEN
         self._t0 = time.monotonic()
         self._hover = False
+        self._held = False           # v0.8.0: on hold (Bria Desktop API)
+        self._controls_on = False    # hold / transfer buttons offered (bria_api.enabled)
+        self._extensions: list = []
         self._tick = QTimer(self)    # drives the duration label
         self._tick.setInterval(250)
         self._tick.timeout.connect(self._update_timer)
@@ -393,6 +407,40 @@ class CallOverlay(QWidget):
             root.addWidget(w)
         for w in (self.lbl_name, self.lbl_number):           # name / number can be selected with the mouse
             w.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+        # v0.8.0 call control (only while a call is live): hold / resume and transfer to a saved extension
+        self.controls = QWidget()
+        crow = QHBoxLayout(self.controls)
+        crow.setContentsMargins(0, 8, 0, 0)
+        crow.setSpacing(8)
+        self.btn_hold = QPushButton("⏸ Tartás")
+        self.btn_hold.setObjectName("ctl")
+        self.btn_hold.setToolTip("A hívás tartásba tétele (a hívó várakozik)")
+        self.btn_xfer = QPushButton("↪ Átkapcsolás")
+        self.btn_xfer.setObjectName("ctl")
+        self.btn_xfer.setCheckable(True)
+        self.btn_xfer.setToolTip("A hívás átkapcsolása egy kollégához")
+        for b in (self.btn_hold, self.btn_xfer):
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            crow.addWidget(b)
+        self.btn_hold.clicked.connect(lambda: self._request_hold(not self._held))
+        self.btn_xfer.toggled.connect(self._toggle_xfer_panel)
+        root.addWidget(self.controls)
+        self.controls.setVisible(False)
+        self.xfer_panel = QWidget()
+        self._xfer_grid = QGridLayout(self.xfer_panel)
+        self._xfer_grid.setContentsMargins(0, 6, 0, 0)
+        self._xfer_grid.setSpacing(6)
+        root.addWidget(self.xfer_panel)
+        self.xfer_panel.setVisible(False)
+        self.lbl_hint = QLabel()
+        self.lbl_hint.setObjectName("hint")
+        self.lbl_hint.setWordWrap(True)
+        self.lbl_hint.setVisible(False)
+        root.addWidget(self.lbl_hint)
+        self._hint_timer = QTimer(self)
+        self._hint_timer.setSingleShot(True)
+        self._hint_timer.timeout.connect(lambda: (self.lbl_hint.setVisible(False), self._place()))
 
         self.actions = QWidget()
         row = QHBoxLayout(self.actions)
@@ -452,7 +500,8 @@ class CallOverlay(QWidget):
         self.status.setStyleSheet(f"color:{color};")
         self.icon.set_mode(icon_mode or visual, MISSED_BURGUNDY if visual == "missed" else accent)
         if visual in ("ring", "talk", "hold"):
-            self._anim_timer.start()
+            # ringing: 25 fps for the glow; a live call can last an hour, so its icon runs at 15 fps
+            self._anim_timer.start(ANIM_MS if visual == "ring" else ANIM_CALL_MS)
         else:
             self._anim_timer.stop()
         self.update()
@@ -598,6 +647,7 @@ class CallOverlay(QWidget):
         self.lbl_timer.setText(format_duration(0))
         self.lbl_timer.setVisible(True)
         self._tick.start()
+        self.controls.setVisible(self._controls_on)
         self._place()
 
     def _update_timer(self):
@@ -624,6 +674,7 @@ class CallOverlay(QWidget):
         self._when = when or time.strftime("%H:%M")
         self._rank, self._seq = 1, next(_SEQ)           # above the live call, newest missed card nearest to it
         times = f" ×{self._missed_count}" if self._missed_count > 1 else ""
+        self._hide_controls()
         self._set_visual("missed", MISSED_RED, f"NEM FOGADOTT HÍVÁS{times} · {self._when}")
         self.actions.setVisible(True)
         self._fade(1.0, 120)
@@ -665,6 +716,7 @@ class CallOverlay(QWidget):
         if self._answered_at is not None:
             self.lbl_timer.setText(format_duration(time.monotonic() - self._answered_at))
             self.lbl_timer.setStyleSheet(f"color:{ENDED_GREY};")
+        self._hide_controls()
         self._set_visual("ended", accent, text, icon)
         self._place()
         ms = self._linger_ms if linger_ms is None else max(0, int(linger_ms))
@@ -754,3 +806,113 @@ class CallOverlay(QWidget):
             button.style().unpolish(button)
             button.style().polish(button)
         QTimer.singleShot(ms, restore)
+
+    # ---- v0.8.0: hold / transfer -------------------------------------------------------------------------
+    def set_call_controls(self, enabled: bool, extensions=()):
+        """Offer hold / transfer on this card (bria_api.enabled) and the saved extensions [(number, name)]."""
+        self._controls_on = bool(enabled)
+        self._extensions = list(extensions or [])
+        self._build_xfer_panel()
+        if self._answered and not (self._ended or self._closing or self._missed):
+            self.controls.setVisible(self._controls_on)
+            self._place()
+
+    def _build_xfer_panel(self):
+        while self._xfer_grid.count():
+            item = self._xfer_grid.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        if not self._extensions:
+            lab = QLabel("Nincs mentett mellék. Adja meg őket a főablakban: ☎ Mellékek…")
+            lab.setObjectName("empty")
+            lab.setWordWrap(True)
+            self._xfer_grid.addWidget(lab, 0, 0, 1, 2)
+            return
+        for i, (number, name) in enumerate(self._extensions):
+            b = QPushButton(f"{name}  ·  {number}")
+            b.setObjectName("ext")
+            b.setToolTip(f"Átkapcsolás: {name} ({number}) – egy kattintás")
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _=False, n=number, nm=name: self._request_transfer(n, nm))
+            self._xfer_grid.addWidget(b, i // 2, i % 2)
+
+    def _toggle_xfer_panel(self, on: bool):
+        self.xfer_panel.setVisible(on and self._answered and not self._ended)
+        self._place()
+
+    def _hide_controls(self):
+        self.controls.setVisible(False)
+        self.xfer_panel.setVisible(False)
+        self.lbl_hint.setVisible(False)
+        self.btn_xfer.blockSignals(True)
+        self.btn_xfer.setChecked(False)
+        self.btn_xfer.blockSignals(False)
+
+    def _busy(self, on: bool, text: str = ""):
+        for b in (self.btn_hold, self.btn_xfer):
+            b.setEnabled(not on)
+        for i in range(self._xfer_grid.count()):
+            w = self._xfer_grid.itemAt(i).widget()
+            if isinstance(w, QPushButton):
+                w.setEnabled(not on)
+        if on and text:
+            self.lbl_hint.setStyleSheet("color:#9399b2;")
+            self.lbl_hint.setText(text)
+            self.lbl_hint.setVisible(True)
+            self._hint_timer.stop()
+            self._place()
+
+    def _request_hold(self, hold: bool):
+        if self._closing or self._ended or not self._answered:
+            return
+        self._busy(True, "Tartásba tétel…" if hold else "Visszavétel…")
+        self.hold_requested.emit(hold)
+
+    def _request_transfer(self, number: str, name: str):
+        if self._closing or self._ended or not self._answered:
+            return
+        self._busy(True, f"Átkapcsolás: {name} ({number})…")
+        self.transfer_requested.emit(number, name)
+
+    def set_hold(self, held: bool):
+        """Bria confirmed the hold state."""
+        if self._closing or self._ended:
+            return
+        self._busy(False)
+        self.lbl_hint.setVisible(False)
+        self._held = bool(held)
+        if self._held:
+            self._set_visual("hold", HOLD_PEACH, "TARTVA")
+            self.btn_hold.setText("▶ Folytatás")
+            self.btn_hold.setToolTip("A hívás visszavétele a tartásból")
+        else:
+            self._set_visual("talk", ANSWERED_BLUE, "HÍVÁSBAN")
+            self.btn_hold.setText("⏸ Tartás")
+            self.btn_hold.setToolTip("A hívás tartásba tétele (a hívó várakozik)")
+        self._place()
+
+    def control_failed(self, message: str):
+        """A hold / transfer request failed: buttons back, a short red hint for 7 s."""
+        if self._closing or self._ended:
+            return
+        self._busy(False)
+        self.lbl_hint.setStyleSheet("")
+        self.lbl_hint.setText("⚠ " + message)
+        self.lbl_hint.setVisible(True)
+        self._hint_timer.start(7000)
+        self._place()
+
+    def transferred(self, name: str, number: str):
+        """Bria accepted the transfer: the card confirms it, then fades (the call has left this phone)."""
+        self._busy(False)
+        self.finish("ÁTKAPCSOLVA", None, "done", OUTGOING_MAUVE)
+        self._hint_timer.stop()
+        self.lbl_hint.setStyleSheet("color:#cba6f7;")
+        self.lbl_hint.setText(f"→ {name} · mellék {number}")
+        self.lbl_hint.setVisible(True)
+        self._place()
+
+    @property
+    def is_held(self) -> bool:
+        return self._held

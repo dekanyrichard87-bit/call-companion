@@ -14,9 +14,11 @@ from shiboken6 import isValid   # ships with PySide6: False once the C++ side of
 
 import config
 import updater
+from bria_api import BriaApi, BriaApiError
 from crm import CallerInfo, MiniCrmClient
 from detectors import BriaLogDetector
 from dev_window import DevWindow
+from extensions_dialog import ExtensionsDialog
 from events import CallEvent, normalize_number
 from history import HistoryStore
 from local_api import LocalApi
@@ -73,10 +75,14 @@ class Controller(QObject):
     status_sig = Signal(str)            # tray tooltip text
     tray_msg_sig = Signal(str, str)     # tray balloon title, text
     company_sig = Signal(str, str)      # call_id, company name (stage 2: arrives after the name)
+    bria_sig = Signal(str, str, bool, str, object)   # v0.8.0: call_id, action, ok, message, extra
+    bria_check_sig = Signal(bool, str)                # v0.8.0: developer window "Bria vezérlés ellenőrzése"
 
-    def __init__(self, cfg: dict, store: HistoryStore | None = None):
+    def __init__(self, cfg: dict, store: HistoryStore | None = None, settings: Settings | None = None):
         super().__init__()
         self.cfg = cfg
+        self.settings = settings
+        self.bria_api = BriaApi(cfg.get("bria_api") or {}, f"CallCompanion/{__version__}")
         self.mock = cfg["minicrm"]["mock"]
         self.source = cfg["minicrm"]["cookie_source"]
         self.client = MiniCrmClient(cfg["minicrm"])
@@ -101,6 +107,9 @@ class Controller(QObject):
         self.session_sig.connect(self.on_session)
         self.ext_sig.connect(self.on_ext)
         self.company_sig.connect(self.on_company)
+        self.bria_sig.connect(self.on_bria_result)
+        if settings is not None:
+            settings.changed.connect(self._extensions_changed)
 
     # ---- lifecycle ---------------------------------------------------------------------
     def is_busy(self) -> bool:
@@ -284,12 +293,24 @@ class Controller(QObject):
     def _new_overlay(self) -> CallOverlay:
         ov = CallOverlay(**self._ui_kwargs())
         ov.closed.connect(lambda ov=ov: self._on_overlay_closed(ov))
+        cid = self.current_id
+        if cid:                  # a call card (not a notice): hold / transfer through the Bria Desktop API
+            exts = self.settings.extensions if self.settings is not None else []
+            ov.set_call_controls(self.bria_api.enabled, exts)
+            ov.hold_requested.connect(lambda hold, cid=cid, ov=ov: self._bria_action(cid, ov, "hold", hold))
+            ov.transfer_requested.connect(
+                lambda number, name, cid=cid, ov=ov: self._bria_action(cid, ov, "transfer", (number, name)))
         self.overlay = ov
         return ov
 
     def _on_overlay_closed(self, ov):
         if self.overlay is ov:   # a late signal from an overlay that was already replaced is ignored
             self.overlay = None
+            cid = self.current_id
+            if cid and (self._calls.get(cid) or {}).get("transferred"):
+                # the transferred call has left this phone; do not wait for a hang-up that may never be logged
+                self._calls.pop(cid, None)
+                self.current_id = None
         for cid, card in list(self.missed.items()):
             if card is ov:
                 del self.missed[cid]
@@ -431,6 +452,83 @@ class Controller(QObject):
         if ov:
             ov.set_company(company)
 
+    # ---- v0.8.0: hold / transfer through the Bria Desktop API ------------------------------------------------
+    def _extensions_changed(self):
+        ov = self._live_overlay()
+        if ov is not None and self.current_id:
+            ov.set_call_controls(self.bria_api.enabled, self.settings.extensions)
+
+    def _bria_action(self, call_id: str, ov, action: str, arg):
+        number = ov.number if isValid(ov) else ""
+        log.info("bria action %s for call %s", action, call_id)
+
+        def job():
+            try:
+                if action == "hold":
+                    held = self.bria_api.set_hold(number, bool(arg))
+                    self.bria_sig.emit(call_id, "hold", True, "", held)
+                else:
+                    ext, name = arg
+                    self.bria_api.transfer(number, ext)
+                    self.bria_sig.emit(call_id, "transfer", True, "", (ext, name))
+            except BriaApiError as e:
+                log.warning("bria action %s failed: %s", action, e)
+                self.bria_sig.emit(call_id, action, False, e.user_text, e.code)
+            except Exception as e:                       # never leave the card buttons disabled
+                log.exception("bria action %s crashed", action)
+                self.bria_sig.emit(call_id, action, False, "Váratlan hiba a Bria vezérlésben", e.__class__.__name__)
+        try:
+            self.pool.submit(job)
+        except RuntimeError:
+            pass
+
+    BRIA_LINK_ERRORS = ("BRIA-API-OFF", "BRIA-API-TIMEOUT", "BRIA-API-HANDSHAKE", "BRIA-API-CLOSED")
+
+    def on_bria_result(self, call_id: str, action: str, ok: bool, message: str, extra):
+        now = time.strftime("%H:%M:%S")
+        if ok:
+            self.status.set_bria_api(Health.OK, f"Rendben • utolsó művelet {now} ({action})")
+        elif extra in self.BRIA_LINK_ERRORS:
+            self.status.set_bria_api(Health.ERROR, f"{extra}: {message} ({now})")
+        else:
+            self.status.set_bria_api(Health.WARN, f"{extra}: {message} ({now})")
+        ov = self._overlay_for(call_id)
+        if not ok:
+            if ov:
+                ov.control_failed(message)
+            return
+        if action == "hold":
+            self.status.call_hold(call_id, bool(extra))
+            if ov:
+                ov.set_hold(bool(extra))
+        elif action == "transfer":
+            ext, name = extra
+            meta = self._calls.get(call_id)
+            if meta is not None:
+                meta["transferred"] = True
+            self.status.call_note(call_id, f"Átkapcsolva: {name} ({ext})", "transferred")
+            if ov:
+                ov.transferred(name, ext)
+
+    def check_bria(self):
+        def job():
+            try:
+                text = self.bria_api.check()
+                self.bria_check_sig.emit(True, text)
+            except BriaApiError as e:
+                self.bria_check_sig.emit(False, f"{e.code}: {e.user_text} ({e.detail})")
+            except Exception as e:
+                log.exception("bria check crashed")
+                self.bria_check_sig.emit(False, f"Váratlan hiba: {e.__class__.__name__}")
+        self.pool.submit(job)
+
+    def on_bria_check(self, ok: bool, text: str):
+        if ok:
+            self.status.set_bria_api(Health.OK, text)
+        else:
+            self.status.set_bria_api(Health.ERROR if any(c in text for c in self.BRIA_LINK_ERRORS)
+                                     else Health.WARN, text)
+
 
 SIM_SCENARIOS = {                      # (delay in ms, event kind)
     "answered": [(0, "ringing"), (4000, "answered"), (24000, "ended")],      # 20 s of talk: the counter is visible
@@ -512,12 +610,16 @@ def main():
     store = HistoryStore(config.data_dir() / "history.db", hist_cfg.get("retention_days", 90),
                          hist_cfg.get("max_rows", 2000))
     settings = Settings(config.data_dir() / "settings.json")
-    ctl = Controller(cfg, store)
+    ctl = Controller(cfg, store, settings)
     data_dir = str(config.data_dir())
     win = MainWindow(ctl.status, __version__, settings.dev_mode, data_dir)
     dev = DevWindow(ctl.status, data_dir, __version__)
     dev.recheck_requested.connect(ctl.check_session)
     dev.simulate_requested.connect(lambda number, scenario: simulate(ctl, number, scenario))
+    dev.bria_api_check.connect(ctl.check_bria)
+    ctl.bria_check_sig.connect(ctl.on_bria_check)
+    ctl.bria_check_sig.connect(dev.bria_check_result)
+    win.edit_extensions.connect(lambda: ExtensionsDialog(settings, win).exec())
 
     def quit_app():
         win.prepare_quit()

@@ -3,6 +3,36 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [0.8.0-beta] - 2026-11-11
+
+Call-handling release, part 3 of the road to 1.0: hold and one-click transfer from the card, with a per-PC list of
+colleagues. Untested against a real Bria yet: this is what the live test of 0.8.0-beta checks before 0.9.0-rc.
+
+### Added
+- **Bria Desktop API client** (`bria_api.py`): Bria's local secure WebSocket (`127.0.0.1:9002`,
+  `cpclientapi.softphone.com`), implemented on the standard library (no new package). One short connection per action:
+  `GET /status` "call" to find Bria's id of the card's call (matched on the last 9 digits of the number; with one call in
+  Bria, that one), then `GET /hold`, `GET /resume` or `GET /transferCall`. Status-change events are skipped while it waits
+  for the answer. Errors carry a short code (`BRIA-API-OFF`, `-TIMEOUT`, `-HANDSHAKE`, `-CLOSED`, `-NOCALL`, `-HTTP`,
+  `-PARSE`) and a plain Hungarian text for the card. New `bria_api` config block (`enabled`, `host`, `connect_host`,
+  `port`, `path`, `timeout_s`, `verify_tls`).
+- **⏸ Tartás / ▶ Folytatás** on the card during a call: the card turns into *TARTVA* (amber, breathing pause icon), the
+  counter keeps running. Each press first reads Bria's real hold state, so a hold made in Bria's own window is never
+  toggled the wrong way.
+- **↪ Átkapcsolás**: opens the saved colleagues on the card (two per row, *Name · 102*); **one click transfers**
+  the call (blind transfer, Bria 6.2+). The card confirms *ÁTKAPCSOLVA* with *→ Name · mellék 102*, lingers, fades;
+  the history row gets the status *Átkapcsolva* and the note *Átkapcsolva: Name (102)*. While a request runs the buttons
+  are disabled with a short "…" line; a failure shows a red reason on the card for 7 s and the buttons come back.
+- **Extension list** (`extensions_dialog.py`, main window > **☎ Mellékek…**): extension number + colleague name, up to
+  40, one-click cell editing, add / delete / ▲ ▼ order, validation (digits, `*`, `#`, `+`; no duplicates). Saved in
+  `settings.json`; a card that is open updates at once.
+- Developer tools: **Bria vezérlés ellenőrzése** (answers with Bria's version and the number of running calls) and a
+  *Bria vezérlés (API)* health row. Main window: error code `BRIA-API` when Bria refuses the control connection.
+
+### Changed
+- `Controller(cfg, store, settings)`; new signals `bria_sig`, `bria_check_sig`. A transferred call is released when its
+  card closes, without waiting for a hang-up in the log.
+
 ## [0.7.0-beta] - 2026-11-11
 
 UX release, part 2: the call card tells its state at a glance and says goodbye instead of vanishing.
