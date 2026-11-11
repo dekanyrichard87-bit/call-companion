@@ -73,6 +73,7 @@ DEFAULTS = {
     "ui": {
         "answered_fade_ms": 2500,
         "margin_px": 16,
+        "end_linger_ms": 3000,                # v0.7.0: the ended card stays this long with the outcome, then fades
         # v0.5.1: where the call cards go (read by overlay.py)
         "overlay_position": "bottom_right",   # bottom_right | bottom_left | top_right | top_left
         "offset_x": -380,                     # px added to x (negative = left): clears Bria's incoming-call toast

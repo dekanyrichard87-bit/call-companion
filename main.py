@@ -269,7 +269,8 @@ class Controller(QObject):
     def _ui_kwargs(self):
         ui = self.cfg["ui"]
         return {"margin": ui["margin_px"], "answered_fade_ms": ui["answered_fade_ms"],
-                "close_missed_on_action": bool(ui.get("missed_close_on_action", True))}
+                "close_missed_on_action": bool(ui.get("missed_close_on_action", True)),
+                "end_linger_ms": int(ui.get("end_linger_ms", 3000))}
 
     # CallOverlay deletes itself (deleteLater) after it has faded out, so self.overlay can point at a
     # dead Qt object. Never call methods on it directly: go through _live_overlay() / _drop_overlay().
@@ -322,6 +323,9 @@ class Controller(QObject):
             old = self.missed.pop(next(iter(self.missed)))
             if isValid(old):
                 old.end()
+
+    END_TEXT = {None: "HÍVÁS BEFEJEZVE", "rejected": "ELUTASÍTVA", "elsewhere": "MÁSHOL FOGADTÁK",
+                "unanswered": "NEM VETTÉK FEL", "missed": "NEM FOGADOTT HÍVÁS"}
 
     @staticmethod
     def _outcome(meta: dict, ev: CallEvent):
@@ -384,7 +388,7 @@ class Controller(QObject):
                     if outcome == "missed" and self.cfg["ui"].get("missed_persistent", True):
                         self._keep_missed(ev.call_id, ov, meta.get("when", ""))
                     else:
-                        ov.end()
+                        ov.finish(self.END_TEXT.get(outcome, "HÍVÁS BEFEJEZVE"))     # lingers, then fades
                 self.current_id = None   # reset even if the card already faded out
 
     def _safe_lookup(self, number):

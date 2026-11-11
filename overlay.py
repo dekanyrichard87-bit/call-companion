@@ -6,10 +6,15 @@ Card text, top to bottom (see CallOverlay._lines):
     line 3  small, muted      the PHONE NUMBER (while the lookup runs: "Looking up..."; after a failed lookup: the error)
 An empty line 2 or 3 is hidden, so without a company the number sits directly below the name.
 
-Card states (the status line in the header says which):
-    ● INCOMING CALL / ● OUTGOING CALL   ringing / dialling
-    ● IN CALL  mm:ss                    answered: stays open with a live duration counter until the call ends
-    ● MISSED CALL [×N] · hh:mm          stays until the user closes it (✕) or uses MiniCRM / Google
+Card states (v0.7.0; the header shows an animated icon and the state in Hungarian):
+    BEJÖVŐ HÍVÁS / KIMENŐ HÍVÁS     ringing / dialling: pulsing glow around the card, ripples + a short
+                                    handset "wiggle" in the icon (text and buttons never move)
+    HÍVÁSBAN  mm:ss                 answered: animated sound-wave bars, live duration counter
+    NEM FOGADOTT HÍVÁS [×N] · hh:mm stays until closed; deep burgundy tint and accent bar
+    HÍVÁS BEFEJEZVE · mm:ss (etc.)  after the call ends (or after an action on a missed card) the card stays
+                                    ui.end_linger_ms (default 3 s) with the outcome, then fades out; the timer pauses
+                                    while the mouse is over the card
+Animations run on one 40 ms timer per card and only while it rings or a call is live.
 
 Several cards can be on screen at once. They are stacked at the anchor: the live call (or a notice) nearest to it,
 the missed-call cards beyond it, the newest missed call nearest to the live call.
@@ -24,6 +29,7 @@ Placement (v0.5.1, config "ui" block, read from config.load() on first use):
 import ctypes
 import itertools
 import logging
+import math
 import os
 import re
 import sys
@@ -31,7 +37,7 @@ import time
 from ctypes import wintypes
 from urllib.parse import quote
 
-from PySide6.QtCore import QPropertyAnimation, QRect, QTimer, Qt, QUrl, Signal
+from PySide6.QtCore import QPointF, QPropertyAnimation, QRect, QRectF, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
@@ -46,7 +52,7 @@ UNKNOWN_CALLER = "Ismeretlen hívó"
 
 QSS = """
 QLabel { color:#cdd6f4; background:transparent; font-family:'Segoe UI'; }
-#status { font-size:11px; font-weight:600; }
+#status { font-size:11px; font-weight:700; letter-spacing:1px; }
 #name { font-size:22px; font-weight:700; }
 #company { font-size:15px; font-weight:600; color:#bac2de; }
 #number { font-size:12px; color:#9399b2; }
@@ -55,6 +61,8 @@ QPushButton { background:rgba(255,255,255,20); border:none; border-radius:8px; c
               padding:7px 10px; font-family:'Segoe UI','Segoe UI Emoji'; font-size:12px; }
 QPushButton:hover { background:rgba(255,255,255,42); }
 QPushButton:disabled { color:#6c7086; }
+QPushButton#done { background:rgba(166,227,161,55); color:#a6e3a1; }
+QPushButton#busy { color:#9399b2; }
 #close { background:transparent; font-size:14px; padding:2px 6px; }
 #close:hover { background:rgba(243,139,168,60); }
 """
@@ -62,8 +70,11 @@ QPushButton:disabled { color:#6c7086; }
 
 _STACK: list = []          # every CallOverlay that was placed; pruned when its Qt object is gone
 _SEQ = itertools.count(1)  # creation order, so the newest missed card can sit nearest to the bottom
-STACK_GAP = 10
+GLOW = 6                   # transparent margin around the card for the pulsing glow (px on each side)
+STACK_GAP = 2              # gap between two card windows; the visible gap is STACK_GAP + 2 * GLOW
 INCOMING_GREEN, OUTGOING_MAUVE, ANSWERED_BLUE, MISSED_RED = "#a6e3a1", "#cba6f7", "#89b4fa", "#f38ba8"
+HOLD_PEACH, NOTICE_YELLOW, ENDED_GREY, MISSED_BURGUNDY = "#fab387", "#f9e2af", "#7f849c", "#8c2f45"
+ANIM_MS = 40               # 25 fps, only while a card rings or a call is live
 
 
 # ---- placement: corner + offset, optional docking next to Bria's toast ---------------------------------------
@@ -221,21 +232,110 @@ def format_duration(seconds: int) -> str:
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
 
 
+
+
+def _alpha(color: str, a: int) -> QColor:
+    c = QColor(color)
+    c.setAlpha(max(0, min(255, int(a))))
+    return c
+
+
+class StateIcon(QWidget):
+    """22 px animated state icon in the card header (painted, no image files).
+    ring      ripples + a handset that wiggles for 0.45 s every 1.6 s (incoming / outgoing ringing)
+    talk      four sound-wave bars (call in progress)
+    hold      a breathing pause sign (v0.8.0)
+    missed    burgundy disc with a cross        ended / notice / transfer: static glyphs"""
+    SIZE = 22
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self._mode, self._color, self._t0 = "ring", QColor(INCOMING_GREEN), time.monotonic()
+
+    def set_mode(self, mode: str, color: str):
+        self._mode, self._color, self._t0 = mode, QColor(color), time.monotonic()
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        t = time.monotonic() - self._t0
+        c, mode = self._color, self._mode
+        cx = cy = self.SIZE / 2
+        if mode == "ring":
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            for k in range(2):                                   # two expanding ripples
+                ph = (t / 1.4 + k * 0.5) % 1.0
+                p.setPen(QPen(_alpha(c.name(), 170 * (1 - ph)), 1.4))
+                r = 4 + ph * 6.5
+                p.drawEllipse(QPointF(cx, cy), r, r)
+            cyc = t % 1.6                                        # handset wiggle burst
+            ang = 16 * math.sin(cyc * 42) * (1 - cyc / 0.45) if cyc < 0.45 else 0
+            p.translate(cx, cy)
+            p.rotate(ang)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(c)
+            p.drawEllipse(QPointF(0, 0), 5.2, 5.2)
+            p.setPen(QPen(QColor(BASE_BG), 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            p.drawArc(QRectF(-3, -3, 6, 6), 200 * 16, 140 * 16)  # tiny handset curve
+        elif mode == "talk":
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(c)
+            for i in range(4):
+                h = 4 + 10 * (0.5 + 0.5 * math.sin(t * 7.0 + i * 1.3)) * (0.6 + 0.4 * math.sin(t * 2.3 + i))
+                x = 3.5 + i * 4.5
+                p.drawRoundedRect(QRectF(x, cy - h / 2, 2.6, h), 1.3, 1.3)
+        elif mode == "hold":
+            a = 150 + 105 * (0.5 + 0.5 * math.sin(t * 2.6))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(_alpha(c.name(), a))
+            p.drawRoundedRect(QRectF(6, 5, 3.4, 12), 1.5, 1.5)
+            p.drawRoundedRect(QRectF(12.6, 5, 3.4, 12), 1.5, 1.5)
+        else:                                                    # static: missed / ended / notice / done
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(_alpha(c.name(), 60 if mode != "missed" else 255))
+            p.drawEllipse(QPointF(cx, cy), 9, 9)
+            pen = QPen(QColor("#f5c2cf") if mode == "missed" else c, 1.8, Qt.PenStyle.SolidLine,
+                       Qt.PenCapStyle.RoundCap)
+            p.setPen(pen)
+            if mode == "missed":
+                p.drawLine(QPointF(7.5, 7.5), QPointF(14.5, 14.5))
+                p.drawLine(QPointF(14.5, 7.5), QPointF(7.5, 14.5))
+            elif mode == "done":
+                p.drawLine(QPointF(7, 11.5), QPointF(10, 14.5))
+                p.drawLine(QPointF(10, 14.5), QPointF(15.5, 8))
+            elif mode == "notice":
+                p.drawLine(QPointF(11, 6.5), QPointF(11, 12.5))
+                p.drawPoint(QPointF(11, 15.5))
+            else:                                                # ended: handset down (short bar)
+                p.drawLine(QPointF(6.5, 12), QPointF(15.5, 12))
+        p.end()
+
+
+BASE_BG = "#1e1e2e"
+
+
 class CallOverlay(QWidget):
     closed = Signal()
-    WIDTH = 340
+    WIDTH = 340                       # visible card width
+    OUTER = WIDTH + 2 * GLOW          # window width (card + glow margin)
+    LINGER_DEFAULT_MS = 3000
 
-    def __init__(self, margin: int = 16, answered_fade_ms: int = 2500, close_missed_on_action: bool = True):
+    def __init__(self, margin: int = 16, answered_fade_ms: int = 2500, close_missed_on_action: bool = True,
+                 end_linger_ms: int = LINGER_DEFAULT_MS):
         super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
                          | Qt.WindowType.Tool | Qt.WindowType.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self.setFixedWidth(self.WIDTH)
+        self.setFixedWidth(self.OUTER)
         self.setStyleSheet(QSS)
         self._margin, self._fade_ms = margin, answered_fade_ms
+        self._linger_ms = max(0, int(end_linger_ms))
         self._number, self._url = "", ""
         self._anim = None
-        self._closing = False
+        self._closing = False        # fading out (or about to): no more state changes
+        self._ended = False          # lingering with the outcome before the fade
         self._found = False          # the card shows a found caller (only then may a company line be added)
         self._answered = False       # in call: live duration counter
         self._answered_at = None     # time.monotonic() of the answer
@@ -244,18 +344,28 @@ class CallOverlay(QWidget):
         self._close_on_action = close_missed_on_action
         self._rank = 0               # stack position: 0 = live call / notice (bottom), 1 = missed card (above)
         self._seq = next(_SEQ)
+        self._visual = "ring"        # ring | talk | hold | missed | ended | notice  (drives paintEvent)
+        self._accent = INCOMING_GREEN
+        self._t0 = time.monotonic()
+        self._hover = False
         self._tick = QTimer(self)    # drives the duration label
         self._tick.setInterval(250)
         self._tick.timeout.connect(self._update_timer)
-        self._timer = QTimer(self)
+        self._anim_timer = QTimer(self)
+        self._anim_timer.setInterval(ANIM_MS)
+        self._anim_timer.timeout.connect(self._animate)
+        self._timer = QTimer(self)   # notice timeout / linger before the fade
         self._timer.setSingleShot(True)
-        self._timer.timeout.connect(self.end)
+        self._timer.timeout.connect(self._linger_done)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(18, 14, 18, 16)
+        root.setContentsMargins(18 + GLOW, 13 + GLOW, 18 + GLOW, 15 + GLOW)
         root.setSpacing(4)
         head = QHBoxLayout()
-        self.status = QLabel("INCOMING CALL")
+        head.setSpacing(8)
+        self.icon = StateIcon(self)
+        head.addWidget(self.icon)
+        self.status = QLabel("BEJÖVŐ HÍVÁS")
         self.status.setObjectName("status")
         head.addWidget(self.status)
         head.addStretch()
@@ -265,8 +375,9 @@ class CallOverlay(QWidget):
         head.addWidget(self.lbl_timer)
         self.btn_close = QPushButton("✕")
         self.btn_close.setObjectName("close")
+        self.btn_close.setToolTip("Bezárás")
         self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_close.clicked.connect(self.end)
+        self.btn_close.clicked.connect(self.close_now)
         head.addWidget(self.btn_close)
         root.addLayout(head)
 
@@ -289,7 +400,10 @@ class CallOverlay(QWidget):
         row.setSpacing(8)
         self.btn_crm = QPushButton("🔍 MiniCRM")
         self.btn_google = QPushButton("🌐 Google")
-        self.btn_copy = QPushButton("📋 Copy")
+        self.btn_copy = QPushButton("📋 Másolás")
+        self.btn_crm.setToolTip("A hívó megnyitása a MiniCRM-ben")
+        self.btn_google.setToolTip("A szám keresése a Google-ben")
+        self.btn_copy.setToolTip("A telefonszám másolása a vágólapra")
         for b in (self.btn_crm, self.btn_google, self.btn_copy):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             row.addWidget(b)
@@ -302,9 +416,51 @@ class CallOverlay(QWidget):
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setBrush(QColor(30, 30, 46, 235))          # #1e1e2e, slightly translucent
-        p.setPen(QPen(QColor(255, 255, 255, 40), 1))
-        p.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 16, 16)
+        card = QRectF(self.rect()).adjusted(GLOW + 0.5, GLOW + 0.5, -GLOW - 0.5, -GLOW - 0.5)
+        v, accent = self._visual, self._accent
+        if v == "ring":                                          # pulsing glow (1.2 s period)
+            t = time.monotonic() - self._t0
+            pulse = 0.5 + 0.5 * math.sin(t * 2 * math.pi / 1.2)
+            for i in range(GLOW, 0, -1):
+                p.setPen(QPen(_alpha(accent, (14 + 46 * pulse) * (1 - i / (GLOW + 1))), 1.0))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRoundedRect(card.adjusted(-i, -i, i, i), 16 + i, 16 + i)
+            border = _alpha(accent, 90 + 130 * pulse)
+        elif v in ("talk", "hold"):
+            border = _alpha(accent, 110)
+        elif v == "missed":
+            border = _alpha(MISSED_BURGUNDY, 230)
+        elif v == "notice":
+            border = _alpha(NOTICE_YELLOW, 90)
+        else:
+            border = QColor(255, 255, 255, 30)
+        bg = QColor(52, 24, 34, 242) if v == "missed" else QColor(30, 30, 46, 238)   # #1e1e2e / burgundy tint
+        p.setBrush(bg)
+        p.setPen(QPen(border, 1.4))
+        p.drawRoundedRect(card, 16, 16)
+        if v in ("missed", "talk", "hold", "ring"):              # thin accent bar on the left edge
+            bar = MISSED_BURGUNDY if v == "missed" else accent
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(_alpha(bar, 255 if v == "missed" else 150))
+            p.drawRoundedRect(QRectF(card.left() + 1.5, card.top() + 18, 3.2, card.height() - 36), 1.6, 1.6)
+
+    def _set_visual(self, visual: str, accent: str, text: str, icon_mode: str | None = None):
+        self._visual, self._accent = visual, accent
+        self._t0 = time.monotonic()
+        self.status.setText(text)
+        color = "#f5a3b5" if visual == "missed" else (ENDED_GREY if visual == "ended" else accent)
+        self.status.setStyleSheet(f"color:{color};")
+        self.icon.set_mode(icon_mode or visual, MISSED_BURGUNDY if visual == "missed" else accent)
+        if visual in ("ring", "talk", "hold"):
+            self._anim_timer.start()
+        else:
+            self._anim_timer.stop()
+        self.update()
+
+    def _animate(self):
+        self.icon.update()
+        if self._visual == "ring":
+            self.update()                     # the glow pulses: repaint the whole card (only while ringing)
 
     def _place(self):
         self.adjustSize()
@@ -329,7 +485,9 @@ class CallOverlay(QWidget):
         live.sort(key=lambda w: (w._rank, -w._seq))
         scr = QGuiApplication.primaryScreen()
         area = scr.availableGeometry()
-        p, m, width = _PLACEMENT, live[0]._margin, CallOverlay.WIDTH
+        # The window is GLOW px bigger than the visible card on every side: shrink the margin by GLOW so the
+        # visible card edge stays where it was before v0.7.0.
+        p, m, width = _PLACEMENT, live[0]._margin - GLOW, CallOverlay.OUTER
 
         toast = find_bria_toast(scr) if p["dock_to_bria"] else None
         anchor = toast.getRect() if toast is not None else p["position"]
@@ -386,24 +544,22 @@ class CallOverlay(QWidget):
     def show_ringing(self, number: str, direction: str = "in"):
         """Instant card, before the lookup has answered: the number is the only thing known, so it is the
         big line; set_caller() then swaps in the name and moves the number below it.
-        direction "out" = a call we dial: the same card with an OUTGOING CALL status."""
+        direction "out" = a call we dial: the same card with a KIMENŐ HÍVÁS header."""
         self._number, self._direction = number, ("out" if direction == "out" else "in")
         self._found, self._answered, self._missed = False, False, False
         self._answered_at = None
         self.lbl_timer.setVisible(False)
         if self._direction == "out":
-            self.status.setText("● OUTGOING CALL")
-            self.status.setStyleSheet(f"color:{OUTGOING_MAUVE};")
+            self._set_visual("ring", OUTGOING_MAUVE, "KIMENŐ HÍVÁS")
         else:
-            self.status.setText("● INCOMING CALL")
-            self.status.setStyleSheet(f"color:{INCOMING_GREEN};")
-        self._lines(number or "Unknown number", "", "Looking up…")
+            self._set_visual("ring", INCOMING_GREEN, "BEJÖVŐ HÍVÁS")
+        self._lines(number or "Ismeretlen szám", "", "Keresés a MiniCRM-ben…")
         self.btn_crm.setEnabled(False)
         self.actions.setVisible(True)
         self.setWindowOpacity(0.0)
         self._place()
         self.show()
-        self._fade(1.0, 150)
+        self._fade(1.0, 160)
 
     def set_caller(self, info: CallerInfo):
         if self._closing:
@@ -415,9 +571,11 @@ class CallOverlay(QWidget):
             self.btn_crm.setEnabled(bool(self._url))
         elif info.error:
             # the lookup itself failed: the caller is NOT known to be unknown, so keep the number as the big line
-            self._lines(self._number or "Unknown number", "Lookup failed", info.error)
+            self._lines(self._number or "Ismeretlen szám", "Sikertelen keresés", info.error)
         else:
             self._lines(UNKNOWN_CALLER, "", self._number)
+        self.btn_crm.setToolTip("A hívó megnyitása a MiniCRM-ben" if self._url
+                                else "Ez a hívó nincs meg a MiniCRM-ben")
         self._place()
 
     def set_company(self, company: str):
@@ -430,21 +588,20 @@ class CallOverlay(QWidget):
         self._place()
 
     def set_answered(self):
-        """The call was picked up: the card stays open and counts the call duration up until end() is called."""
-        if self._closing or self._missed:
+        """The call was picked up: the card stays open and counts the call duration up until the call ends."""
+        if self._closing or self._ended or self._missed:
             return
         self._answered = True
         self._answered_at = time.monotonic()
         self._timer.stop()
-        self.status.setText("● IN CALL")
-        self.status.setStyleSheet(f"color:{ANSWERED_BLUE};")
+        self._set_visual("talk", ANSWERED_BLUE, "HÍVÁSBAN")
         self.lbl_timer.setText(format_duration(0))
         self.lbl_timer.setVisible(True)
         self._tick.start()
         self._place()
 
     def _update_timer(self):
-        if self._answered_at is None or self._closing:
+        if self._answered_at is None or self._closing or self._ended:
             return
         text = format_duration(time.monotonic() - self._answered_at)
         if text != self.lbl_timer.text():
@@ -467,8 +624,7 @@ class CallOverlay(QWidget):
         self._when = when or time.strftime("%H:%M")
         self._rank, self._seq = 1, next(_SEQ)           # above the live call, newest missed card nearest to it
         times = f" ×{self._missed_count}" if self._missed_count > 1 else ""
-        self.status.setText(f"● MISSED CALL{times} · {self._when}")
-        self.status.setStyleSheet(f"color:{MISSED_RED};")
+        self._set_visual("missed", MISSED_RED, f"NEM FOGADOTT HÍVÁS{times} · {self._when}")
         self.actions.setVisible(True)
         self._fade(1.0, 120)
         self._place()
@@ -486,8 +642,7 @@ class CallOverlay(QWidget):
         return self._missed_count
 
     def show_notice(self, title: str, text: str, ms: int = 7000):
-        self.status.setText("⚠ NOTICE")
-        self.status.setStyleSheet("color:#f9e2af;")
+        self._set_visual("notice", NOTICE_YELLOW, "FIGYELMEZTETÉS", "notice")
         self._lines(title, text)
         self.lbl_name.setStyleSheet("font-size:15px; font-weight:600;")    # a notice title is not a caller name
         self.actions.setVisible(False)
@@ -495,16 +650,63 @@ class CallOverlay(QWidget):
         self._place()
         self.show()
         self._fade(1.0, 150)
+        self._ended = True                     # a notice only lingers, then fades (hover pauses it)
         self._timer.start(ms)
 
+    # ---- ending: linger with the outcome, then fade ------------------------------------------------
+    def finish(self, text: str = "HÍVÁS BEFEJEZVE", linger_ms: int | None = None, icon: str = "ended",
+               accent: str = ENDED_GREY):
+        """The call is over (or the user acted on a missed card): show `text` for linger_ms (default
+        ui.end_linger_ms), then fade out. The counter freezes at the final duration. Hovering pauses the timer."""
+        if self._closing or self._ended:
+            return
+        self._ended = True
+        self._tick.stop()
+        if self._answered_at is not None:
+            self.lbl_timer.setText(format_duration(time.monotonic() - self._answered_at))
+            self.lbl_timer.setStyleSheet(f"color:{ENDED_GREY};")
+        self._set_visual("ended", accent, text, icon)
+        self._place()
+        ms = self._linger_ms if linger_ms is None else max(0, int(linger_ms))
+        if ms <= 0:
+            self.end()
+        elif not self._hover:
+            self._timer.start(ms)
+
+    def _linger_done(self):
+        if self._hover and self._ended:
+            return                              # leaveEvent restarts a short timer
+        self.end()
+
+    def enterEvent(self, e):
+        self._hover = True
+        if self._ended and self._timer.isActive():
+            self._timer.stop()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        self._hover = False
+        if self._ended and not self._closing:
+            self._timer.start(1500)
+        super().leaveEvent(e)
+
+    @property
+    def is_ended(self) -> bool:
+        return self._ended
+
+    def close_now(self):
+        """✕ button: no linger."""
+        self.end()
+
     def end(self):
-        """Call ended / missed / user closed: fade out and destroy."""
+        """Fade out and destroy (immediately, no linger)."""
         if self._closing:
             return
         self._closing = True
         self._timer.stop()
         self._tick.stop()
-        self._fade(0.0, 180, self._finish)
+        self._anim_timer.stop()
+        self._fade(0.0, 200, self._finish)
 
     def _finish(self):
         self.close()
@@ -512,21 +714,43 @@ class CallOverlay(QWidget):
         self.closed.emit()
         self.deleteLater()
 
+    # ---- actions -------------------------------------------------------------------------------------
     def _open_crm(self):
         if self._url:
             QDesktopServices.openUrl(QUrl(self._url))
-            self._acted()
+            self._acted("MINICRM MEGNYITVA")
 
     def _open_google(self):
         QDesktopServices.openUrl(QUrl("https://www.google.com/search?q=" + quote(self._number)))
-        self._acted()
+        self._acted("GOOGLE KERESÉS MEGNYITVA")
 
-    def _acted(self):
-        """A missed-call card is dealt with once the user opened the contact or searched the number."""
+    def _acted(self, text: str):
+        """A missed-call card is dealt with once the user opened the contact or searched the number: it confirms
+        the action for a moment, then goes."""
         if self._missed and self._close_on_action:
-            self.end()
+            self.finish("✓ " + text, min(self._linger_ms or 1800, 1800), "done", INCOMING_GREEN)
 
     def _copy(self):
         QApplication.clipboard().setText(self._number)
-        self.btn_copy.setText("✓ Copied")
-        QTimer.singleShot(1200, lambda: self.btn_copy.setText("📋 Copy"))
+        self._flash(self.btn_copy, "✓ Másolva")
+
+    def _flash(self, button: QPushButton, text: str, ms: int = 1300):
+        """Micro-interaction: the button turns green with a confirmation, then restores itself."""
+        orig = button.property("_orig") or button.text()
+        button.setProperty("_orig", orig)
+        button.setText(text)
+        button.setObjectName("done")
+        button.style().unpolish(button)
+        button.style().polish(button)
+        token = (button.property("_tok") or 0) + 1
+        button.setProperty("_tok", token)
+
+        def restore():
+            if not isValid(button) or button.property("_tok") != token:
+                return
+            button.setText(orig)
+            button.setObjectName("")
+            button.setProperty("_orig", None)
+            button.style().unpolish(button)
+            button.style().polish(button)
+        QTimer.singleShot(ms, restore)

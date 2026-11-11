@@ -3,6 +3,31 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [0.7.0-beta] - 2026-11-11
+
+UX release, part 2: the call card tells its state at a glance and says goodbye instead of vanishing.
+
+### Added
+- **Distinct, animated card states** (`overlay.py`, painted, no image files, one 40 ms timer per card that runs only
+  while the card rings or a call is live):
+  - *Bejövő / kimenő hívás*: a soft glow pulses around the card (green / mauve, 1.2 s) and the header icon shows
+    ripples with a short handset "wiggle" every 1.6 s. Text and buttons never move, so they stay easy to read and click.
+  - *Hívásban*: animated sound-wave bars next to the live counter, blue accent bar.
+  - *Nem fogadott hívás*: elegant deep-burgundy tint, burgundy border and accent bar, crossed icon.
+- **Linger before fading**: when a call ends the card stays for `ui.end_linger_ms` (default 3000 ms) with the
+  outcome — *HÍVÁS BEFEJEZVE* (with the final talk time), *ELUTASÍTVA*, *MÁSHOL FOGADTÁK*, *NEM VETTÉK FEL* — then
+  fades out. After **MiniCRM** or **Google** on a missed-call card it confirms the action (*✓ MINICRM MEGNYITVA*)
+  for up to 1.8 s. Moving the mouse over a lingering card pauses the timer (1.5 s after the mouse leaves).
+- **Micro-interactions**: **📋 Másolás** turns green with *✓ Másolva* for 1.3 s; tooltips on every card button.
+- `CallOverlay.finish(text, linger_ms, icon, accent)`, `close_now()`, `is_ended`; `StateIcon` widget.
+
+### Changed
+- Card texts are Hungarian: *BEJÖVŐ HÍVÁS*, *KIMENŐ HÍVÁS*, *HÍVÁSBAN*, *NEM FOGADOTT HÍVÁS ×2 · 14:05*,
+  *FIGYELMEZTETÉS*, *Keresés a MiniCRM-ben…*, *Sikertelen keresés*, *Ismeretlen szám*, **📋 Másolás**.
+- The card window is 6 px larger on every side (transparent, for the glow); the visible card stays in the same
+  place (`margin_px`, offsets and docking are unchanged). The visible gap between stacked cards is 14 px.
+- The ✕ button still closes at once (no linger).
+
 ## [0.6.0-beta] - 2026-11-11
 
 UX release, part 1 of the road to 1.0: the call list survives a restart, every user gets a plain window, and the
