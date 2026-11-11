@@ -3,6 +3,43 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [0.6.0-beta] - 2026-11-11
+
+UX release, part 1 of the road to 1.0: the call list survives a restart, every user gets a plain window, and the
+technical tools move into a developer mode.
+
+### Added
+- **Persistent call history** (`history.py`): incoming, outgoing and missed calls are saved to
+  `%LOCALAPPDATA%\CallCompanion\history.db` (SQLite, standard library) and are back after a restart. Each row keeps
+  the time, direction, number, name, **company**, MiniCRM link, outcome and talk time. Kept for 90 days / at most
+  2000 calls (new `history` config block: `retention_days`, `max_rows`). A call that was still ringing or running
+  when the app quit is closed as missed / ended at the next start. A broken database never stops the app (the list
+  then stays in memory).
+- **Main window for everyone** (`status_window.MainWindow`): one plain status line with a coloured dot
+  ("Minden rendben • Aktív", or the problem in plain Hungarian with a short error code: `BRIA-LOG`,
+  `MINICRM-LOGIN`, `EXT-OFFLINE`, `MINICRM-NET`, `API-PORT`) and a **Hibajelentés másolása** button that copies a
+  short report (version, state of every part, PC name, no caller data) to the clipboard. Below it the call history
+  with filters (*Összes / Nem fogadott / Mai*) and a search box (name, company, number).
+- **Company shown prominently**: every history row shows the name in bold with the company as a highlighted tag next
+  to it; the company is fetched for the history even when the card was already closed.
+- **Developer mode** (`dev_window.DevWindow`, `settings.py`): a switch at the bottom of the main window (saved in
+  `%LOCALAPPDATA%\CallCompanion\settings.json`). When on, the tray menu and the main window offer
+  **Fejlesztői eszközök**: detailed health rows, MiniCRM re-check, update check, call simulator, a **live view of
+  `app.log`** (read only while the window is open), log folder and "clear history".
+- Micro-interaction helper `status_window.flash()`: a button briefly turns green with a confirmation
+  ("✓ Másolva").
+
+### Changed
+- **No double-clicks anywhere**: a history row is selected with one click and dedicated buttons act on it
+  (**MiniCRM megnyitása**, **Szám másolása**, **Google keresés**); **one click** on the tray icon opens the main window
+  (double-click still works).
+- **Tray menu** in normal mode: *Állapot*, *Híváselőzmények*, *Kilépés*. Developer mode adds *Fejlesztői eszközök*,
+  test calls, MiniCRM re-check and update check.
+- Tray tooltip, notices and the after-install message are in Hungarian.
+- `StatusModel(store)` loads and saves the history; new `call_company()`, `call_note()`, `call_hold()`,
+  `clear_history()`, `summary()` and `report_text()`; `call_ended()` takes `duration_s`. `CallRecord` has `company`,
+  `duration_s` and `note`. `StatusWindow` is now an alias of `MainWindow`.
+
 ## [0.5.1-beta] - 2026-11-10
 
 Hotfix: Bria Enterprise's incoming-call toast covered the call card, because both appeared in the bottom-right corner.

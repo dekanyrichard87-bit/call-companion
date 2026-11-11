@@ -5,7 +5,7 @@ Release flow:  bump __version__ here, add an entry to CHANGELOG.md, commit, then
 which builds the installer and creates the GitHub release v<version> that installed copies update to.
 build.ps1, callcompanion.spec and installer.iss all read the version from this file.
 """
-__version__ = "0.5.1-beta"
+__version__ = "0.6.0-beta"
 
 # GitHub repository whose Releases the auto-updater checks (owner/name).
 GITHUB_REPO = "dekanyrichard87-bit/call-companion"

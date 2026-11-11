@@ -81,6 +81,11 @@ DEFAULTS = {
         "bria_process_regex": "(?i)bria",     # Bria's program file name
         "dock_gap_px": 12,                    # gap between the toast and the docked cards
     },
+    # v0.6.0: persistent call history in %LOCALAPPDATA%\CallCompanion\history.db (history.py)
+    "history": {
+        "retention_days": 90,           # older calls are deleted at start
+        "max_rows": 2000,               # at most this many calls are kept
+    },
     # Auto-update from GitHub Releases (updater.py). Only an installed copy (installer.iss) updates itself.
     "update": {
         "enabled": True,

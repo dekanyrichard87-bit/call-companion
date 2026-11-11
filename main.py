@@ -16,10 +16,13 @@ import config
 import updater
 from crm import CallerInfo, MiniCrmClient
 from detectors import BriaLogDetector
+from dev_window import DevWindow
 from events import CallEvent, normalize_number
+from history import HistoryStore
 from local_api import LocalApi
 from overlay import CallOverlay
-from status_window import Health, StatusModel, StatusWindow, attach_to_tray
+from settings import Settings
+from status_window import Health, MainWindow, StatusModel, attach_to_tray
 from version import __version__
 
 log = logging.getLogger("callcompanion")
@@ -71,7 +74,7 @@ class Controller(QObject):
     tray_msg_sig = Signal(str, str)     # tray balloon title, text
     company_sig = Signal(str, str)      # call_id, company name (stage 2: arrives after the name)
 
-    def __init__(self, cfg: dict):
+    def __init__(self, cfg: dict, store: HistoryStore | None = None):
         super().__init__()
         self.cfg = cfg
         self.mock = cfg["minicrm"]["mock"]
@@ -89,7 +92,7 @@ class Controller(QObject):
         self.bria_service = None
         self.ext_last = None            # time.time() of the last extension push
         self.bria_last_event = ""       # HH:MM:SS of the last call event that came from Bria
-        self.status = StatusModel()     # everything the status window shows
+        self.status = StatusModel(store)    # everything the windows show; the call list is persistent (v0.6.0)
         self.health_timer = QTimer(self)
         self.health_timer.setInterval(10_000)
         self.health_timer.timeout.connect(self.refresh_health)
@@ -173,11 +176,11 @@ class Controller(QObject):
         log.info("session state: %s %s", ok, msg)
         prev, self.session_state = self.session_state, ok
         if self.mock:
-            text = "MiniCRM: mock mode"
+            text = "MiniCRM: teszt (mock) mód"
         else:
-            text = {True: "MiniCRM: logged in", False: "MiniCRM: login needed",
-                    None: "MiniCRM: waiting for Chrome extension"}[ok if ok in (True, False) else None]
-        self.status_sig.emit("Call Companion - " + text)
+            text = {True: "aktív", False: "jelentkezzen be a MiniCRM-be",
+                    None: "várakozás a Chrome-ra"}[ok if ok in (True, False) else None]
+        self.status_sig.emit("Call Companion – " + text)
         if self.mock:
             self.status.set_minicrm(Health.OK, "Mock mód (nincs valódi keresés)")
         elif ok is True:
@@ -191,16 +194,16 @@ class Controller(QObject):
         else:
             self.status.set_minicrm(Health.WARN, "Várakozás a Chrome bővítményre")
         if ok is False and prev is not False:
-            self._show_notice("MiniCRM login needed",
-                              "Please log in to MiniCRM in Chrome so caller names can be resolved.")
+            self._show_notice("Jelentkezzen be a MiniCRM-be",
+                              "Nyissa meg a Chrome-ot és lépjen be a MiniCRM-be, hogy a hívók neve megjelenjen.")
         # Tell the status window a session check has completed (drives the re-check button feedback).
         self.status.recheck_finished.emit()
 
     def _watchdog(self):
         if not self.ext_seen:
             self.tray_msg_sig.emit("Call Companion",
-                                   "Chrome extension not connected. Start Chrome with the "
-                                   "Call Companion extension to enable caller names.")
+                                   "Nincs kapcsolat a Chrome-mal. Nyissa meg a Chrome-ot (benne a MiniCRM-mel), "
+                                   "hogy a hívók neve megjelenjen.")
 
     # ---- status window health ------------------------------------------------------------
     def refresh_health(self):
@@ -352,12 +355,15 @@ class Controller(QObject):
             self.bria_last_event = time.strftime("%H:%M:%S")
         outcome, meta = None, self._calls.get(ev.call_id) or {}
         if ev.kind == "answered":
+            if not meta.get("answered"):
+                meta["answered_at"] = time.monotonic()
             meta["answered"] = True
             self.status.call_answered(ev.call_id)
         elif ev.kind == "ended":
             meta = self._calls.pop(ev.call_id, None) or {"dir": ev.direction}
             outcome = self._outcome(meta, ev)
-            self.status.call_ended(ev.call_id, outcome=outcome)
+            talk = int(time.monotonic() - meta["answered_at"]) if meta.get("answered_at") else 0
+            self.status.call_ended(ev.call_id, outcome=outcome, duration_s=talk)
         if ev.kind == "ringing":
             self._calls[ev.call_id] = {"dir": ev.direction, "answered": False, "when": time.strftime("%H:%M")}
             while len(self._calls) > 50:                 # calls whose end was never seen
@@ -392,12 +398,15 @@ class Controller(QObject):
         state = "found" if info.found else ("failed" if info.error else "unknown")
         self.status.call_resolved(call_id, info.name if info.found else None,
                                   info.profile_url or None, state, info.error, info.elapsed_ms)
+        if info.found and info.company:
+            self.status.call_company(call_id, info.company)
         ov = self._overlay_for(call_id)
         if ov:
             ov.set_caller(info)
         # Stage 2: the name is already on the card. Fetch the company in the background (optional, slower);
-        # it pops in on the second line when it arrives and is dropped if the call has moved on.
-        if (ov and info.found and not info.company and self.client.company_enabled()):
+        # it pops in on the second line when it arrives. Since v0.6.0 it is fetched even when the card is already
+        # gone, so the call history gets the company too (cached per contact for 12 h).
+        if info.found and not info.company and self.client.company_enabled():
             try:
                 self.pool.submit(self._company_job, call_id, info)
             except RuntimeError:            # pool already shut down (app is quitting)
@@ -413,6 +422,7 @@ class Controller(QObject):
             self.company_sig.emit(call_id, company)
 
     def on_company(self, call_id: str, company: str):
+        self.status.call_company(call_id, company)
         ov = self._overlay_for(call_id)
         if ov:
             ov.set_company(company)
@@ -494,45 +504,73 @@ def main():
     app.setQuitOnLastWindowClosed(False)
     icon = make_icon()
     app.setWindowIcon(icon)
-    ctl = Controller(cfg)
-    win = StatusWindow(ctl.status, data_dir=str(config.data_dir()))
-    win.recheck_requested.connect(ctl.check_session)
-    win.simulate_requested.connect(lambda number, scenario: simulate(ctl, number, scenario))
+    hist_cfg = cfg.get("history") or {}
+    store = HistoryStore(config.data_dir() / "history.db", hist_cfg.get("retention_days", 90),
+                         hist_cfg.get("max_rows", 2000))
+    settings = Settings(config.data_dir() / "settings.json")
+    ctl = Controller(cfg, store)
+    data_dir = str(config.data_dir())
+    win = MainWindow(ctl.status, __version__, settings.dev_mode, data_dir)
+    dev = DevWindow(ctl.status, data_dir, __version__)
+    dev.recheck_requested.connect(ctl.check_session)
+    dev.simulate_requested.connect(lambda number, scenario: simulate(ctl, number, scenario))
 
     def quit_app():
         win.prepare_quit()
+        dev.prepare_quit()
         ctl.stop()
+        store.close()
         app.quit()
 
     updates = updater.UpdateManager(cfg, is_busy=ctl.is_busy, quit_app=quit_app, parent=app)
+    dev.check_updates.connect(lambda: updates.check(manual=True))
 
     tray = QSystemTrayIcon(icon, app)
     tray.setToolTip("Call Companion")
     menu = QMenu()
-    menu.setToolTipsVisible(True)                     # "Check for updates" shows the last update state
-    ver_act = menu.addAction(f"Call Companion {__version__}")
-    ver_act.setEnabled(False)
-    open_act = menu.addAction("Status window")
-    open_act.triggered.connect(win.show_and_raise)
-    bold = open_act.font()
-    bold.setBold(True)
-    open_act.setFont(bold)
-    menu.addSeparator()
-    menu.addAction("Test incoming call").triggered.connect(lambda: simulate(ctl, "+36301234567"))
-    menu.addAction("Test outgoing call").triggered.connect(lambda: simulate(ctl, "+36301234567", "outgoing"))
-    menu.addAction("Re-check MiniCRM session").triggered.connect(ctl.check_session)
-    upd_act = menu.addAction("Check for updates")
-    upd_act.triggered.connect(lambda: updates.check(manual=True))
-    menu.addSeparator()
-    menu.addAction("Quit").triggered.connect(quit_app)
-    menu.aboutToShow.connect(lambda: upd_act.setToolTip(updates.state_text))
+    menu.setToolTipsVisible(True)
+
+    def build_menu():
+        """Normal mode: Status, Call history, Quit. Developer mode adds the technical entries."""
+        menu.clear()
+        st = menu.addAction("Állapot")
+        st.triggered.connect(lambda: win.show_and_raise())
+        bold = st.font()
+        bold.setBold(True)
+        st.setFont(bold)
+        menu.addAction("Híváselőzmények").triggered.connect(lambda: win.show_and_raise(history=True))
+        if settings.dev_mode:
+            menu.addSeparator()
+            dv = menu.addAction(f"Fejlesztői eszközök (v{__version__})")
+            dv.triggered.connect(dev.show_and_raise)
+            menu.addAction("Teszthívás – bejövő").triggered.connect(lambda: simulate(ctl, "+36301234567"))
+            menu.addAction("Teszthívás – kimenő").triggered.connect(
+                lambda: simulate(ctl, "+36301234567", "outgoing"))
+            menu.addAction("MiniCRM újraellenőrzése").triggered.connect(ctl.check_session)
+            upd = menu.addAction("Frissítések keresése")
+            upd.triggered.connect(lambda: updates.check(manual=True))
+            upd.setToolTip(updates.state_text)
+        menu.addSeparator()
+        menu.addAction("Kilépés").triggered.connect(quit_app)
+
+    def set_dev_mode(on: bool):
+        settings.set_dev_mode(on)
+        win.set_dev_mode(on)
+        if not on:
+            dev.hide()
+        build_menu()
+
+    win.dev_mode_toggled.connect(set_dev_mode)
+    win.open_dev_tools.connect(dev.show_and_raise)
+    menu.aboutToShow.connect(build_menu)              # also refreshes the update tooltip
+    build_menu()
     tray.setContextMenu(menu)
     ctl.status_sig.connect(tray.setToolTip)
     ctl.tray_msg_sig.connect(lambda t, m: tray.showMessage(
         t, m, QSystemTrayIcon.MessageIcon.Warning, 8000))
     updates.message.connect(lambda t, m: tray.showMessage(
         t, m, QSystemTrayIcon.MessageIcon.Information, 6000))
-    attach_to_tray(tray, win)             # double-click the tray icon -> status window
+    attach_to_tray(tray, win)             # one click on the tray icon -> main window
     tray.show()
 
     ctl.start_services()
@@ -540,7 +578,7 @@ def main():
     updates.start()
     if args.after_install:
         QTimer.singleShot(1_500, lambda: tray.showMessage(
-            "Call Companion", f"Version {__version__} is running. Double-click the tray icon for the status window.",
+            "Call Companion", f"A {__version__} verzió fut. Kattintson a tálcaikonra az állapothoz és a hívásokhoz.",
             QSystemTrayIcon.MessageIcon.Information, 6000))
     if args.show:
         QTimer.singleShot(300, win.show_and_raise)
