@@ -1,10 +1,10 @@
 # Call Companion
 
-**Version 0.9.0-rc.1** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
+**Version 0.9.0-rc.2** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
 
 Call Companion is a small tray application that watches the **Bria Enterprise** softphone and, the moment a
-call rings, shows a dark, frameless pop-up card near the bottom-right corner of the screen, just left of Bria's own
-call notification. The card shows the
+call rings, shows a dark, frameless pop-up card in the bottom-right corner of the screen (it steps left of Bria's own
+call notification, Bria's window and other pop-ups, and slides back when they are gone). The card shows the
 caller's number immediately and, a moment later, the caller's **name from MiniCRM** and, a little later still, the
 caller's **company**, with one-click buttons to open the contact in MiniCRM, search the number on Google, or copy it.
 While you talk, the card stays open and counts the call duration; a **missed call** stays on screen until you close
@@ -251,7 +251,7 @@ New on the road to 1.0 (0.6.0 - 0.9.0-rc.1, see the CHANGELOG):
   **linger** with the outcome before the card fades; green confirmation on copy and other quick actions.
 - **Hold / resume** from the card (verified live on Bria Enterprise 6.8.8.1) and **one-click transfer** to saved
   extensions (Bria Desktop API), shown only when Bria offers transfer (0.9.0-rc.1).
-- **Answer / decline / hang up** from the card (0.9.0-rc.1, unverified on a real call yet).
+- **Answer / decline / hang up** from the card (0.9.0-rc.1, verified live: Bria logs a declined call as `rejected`).
 
 Carried over from earlier releases:
 
@@ -265,9 +265,12 @@ Carried over from earlier releases:
 - **Call duration counter**: an answered call keeps its card open with a live `mm:ss` counter until the call ends.
 - **Persistent missed-call cards**: a missed call stays until you close it; stacked, counted per number, name and
   company filled in even if they arrive late (config: `ui.missed_persistent`, `ui.missed_max`, `ui.missed_close_on_action`).
-- **Clear of Bria's notification** (0.5.1): the cards sit 380 px left of the bottom-right corner, so Bria Enterprise's
-  incoming-call toast no longer covers them. Corner and offset are configurable (`ui.overlay_position`, `ui.offset_x`,
-  `ui.offset_y`); optional `ui.dock_to_bria` places the cards directly beside the toast.
+- **Corner first, step aside when occupied** (0.9.0-rc.2, replaces the fixed 380 px offset of 0.5.1): the cards live
+  in the bottom-right corner of the primary screen's work area. While an incoming call rings, the area of Bria's
+  toast is kept free by rule (the toast is a native Windows notification that no program can see); Bria's main window
+  and small always-on-top pop-ups of other programs (e.g. Viber) are found with one window scan. The whole stack moves
+  left of them, bottoms aligned, 12 px gap, and slides back (~150 ms) when they go away; never while the mouse is over
+  a card. `ui.placement: "fixed"` restores the old corner + offset behaviour.
 - **Outgoing calls**: the card and the MiniCRM lookup (name and company) also work for the number you dial from Bria.
 - **Faster start-up sync**: the Chrome extension retries every 2 s for 2 minutes after the app was not reachable, and a
   MiniCRM tab pokes it every 5 s, so the session usually arrives within seconds of the app starting.
@@ -314,12 +317,11 @@ Carried over from earlier releases:
 | **Outgoing calls are unverified against a real Bria log** | The outgoing INVITE layout (dialled number in the `To` header, 401/407 challenges) was built from the SIP standard and the `Transmitting to` marker, not from a captured call | Run `python main.py --probe-bria 90`, place an outgoing test call and check `Parser recognised ...: ['ringing','answered','ended']`; keep `bria_probe.txt` if not |
 | **"Answered elsewhere" is unverified** | A call picked up on another phone is told apart from a missed call by the `Reason: ... completed elsewhere` header of the CANCEL; whether your PBX sends it is not known | If such calls leave a missed-call card, send the CANCEL lines from `--probe-bria` |
 | **Transfer is not available on a provider-provisioned Bria** | Bria Enterprise 6.8.8.1 provisioned by Opennetworks answers `transferCall` (and attended transfer, recording) with 400, exactly like an unknown command; hold / resume work. Asked the provider to enable it (no answer yet, 2026-11-13) | The app checks this by itself and hides **↪ Átkapcsolás** (`bria api: capability transferCall -> 400`); if the provider enables it, the button appears without an update. Meanwhile transfer in Bria's own window |
-| **Answer / decline / hang up are unverified on a real call** | Bria knows `answer` and `endCall` (capabilities probe, bogus call id), but they were not yet sent for a real call. Which end reason Bria logs after **✕ Elutasít** is unknown; the app never shows such a call as missed | Live test of 0.9.0-rc.1; `app.log`: `bria api: answerCall|endCall <id> -> 200`, `call <id> declined from the card (log reason ...)` |
 | **Transfer is "blind"** | Bria accepts the transfer and the card says *ÁTKAPCSOLVA*; if the colleague does not pick up, Bria brings the call back by itself, but the card is already gone | Watch Bria's own window after a transfer to an extension that may be unattended |
 | **Hold changed in Bria's own window is not mirrored on the card** | The card learns the hold state only from its own button (each press first asks Bria for the real state, so it never toggles the wrong way) | - |
 | **A lost hang-up leaves the in-call card open** | The card closes on the `BYE` found in the Bria log; if the log is rotated or the line is missed, the counter keeps running | Close it with **✕** |
-| **Bria docking is unverified** | `ui.dock_to_bria` finds Bria's toast as a visible, always-on-top, toast-sized window of a process named `bria`; this has not been checked against a real Bria Enterprise toast yet, so it is off by default | Run `bria_toast_probe.py` during a test call; if the toast shows `topmost=True` and is under 640×420, set `"dock_to_bria": true` in the personal `config.json` |
-| Cards follow the **primary screen** only | The cards and the Bria docking use the primary monitor | - |
+| **Card placement is unverified on the office PCs** | The rules come from `tools/placement_probe.py` on the build PC (2 monitors, 150 %). Native Windows notifications of other programs (Teams, Outlook…) are invisible to the window scan, like Bria's toast; Windows stacks them in the same corner | Live test of 0.9.0-rc.2; `app.log` shows every change as `placement: corner|avoid …|above … -> x,y`. If Bria's toast is switched off in Windows, set `"bria_toast": "off"` |
+| Cards follow the **primary screen** only | Windows shows its notifications (and Bria's toast) on the primary monitor, so the cards stay there | - |
 | Missed-call cards: at most 4 | The stack must fit on the screen | `ui.missed_max` |
 | Needs Bria **Log Level = Verbose** | At lower levels Bria writes no SIP messages | Help > Troubleshooting > Support. Verbose logs grow quickly. The app opens the log only for each read, so Bria can rotate or rename it; rotation has not been tested live |
 | **Main window position is best effort** | Windows 11 often reports no position for tray icons, so the window goes to the bottom-right of the usable area of the screen under the cursor (or the primary screen) rather than exactly at the icon | - |
@@ -417,17 +419,20 @@ notes from the matching `CHANGELOG.md` section.
 
 Do not delete or re-tag a published release that PCs have already installed; publish a higher version instead.
 
-### Live test of 0.9.0-rc.1 (both PCs)
+### Live test of 0.9.0-rc.2 (both PCs)
 
-1. On your PC: `.\build.ps1 -Publish` (creates release `v0.9.0-rc.1`); the installed PCs update by themselves within
+1. On your PC: `.\build.ps1 -Publish` (creates release `v0.9.0-rc.2`); the installed PCs update by themselves within
    6 h, or right away with Fejlesztői mód > tray > **Frissítések keresése** (the update waits until no call is live).
-2. Restart the app: the main window shows *Indítás…*, then *Minden rendben • Aktív*, without an `EXT-OFFLINE` flash.
-3. Developer tools > **Bria vezérlés ellenőrzése**: *… • átkapcsolás NEM elérhető ebben a Briában*.
-4. Real incoming call: **✓ Felvesz** answers it (card turns *HÍVÁSBAN*); no **↪ Átkapcsolás** button; **✕ Bontás**
-   ends it (*HÍVÁS BEFEJEZVE*). Second call: **✕ Elutasít** (card *ELUTASÍTVA*, no missed-call card, history
-   *Elutasítva*). Outgoing call: **✕ Bontás** while it rings.
-5. Collect `%LOCALAPPDATA%\CallCompanion\app.log` (lines `bria api: answerCall|endCall`, `declined from the card`);
-   on the colleague's PC also `update-install.log` (0.8.0-beta did not update there).
+   After the update the name can be missing for up to 5 minutes (the extension notices the restart only at its next
+   heartbeat; fixed in rc.4): reload the extension (↻) to skip the wait.
+2. Incoming call: the card rings left of Bria's toast (`placement: avoid reserve bria-toast`); answer it: the card
+   slides into the corner (`placement: corner`).
+3. Bria's main window docked at the right edge, down to the taskbar: the cards stay left of it; minimise Bria: they
+   slide back.
+4. A Viber (or similar) pop-up while a card is on screen: the cards step aside and come back; with the mouse over a
+   card nothing moves.
+5. A missed call: the burgundy card stays in the corner after Bria's toast is gone.
+6. Collect the `placement:` lines of `%LOCALAPPDATA%\CallCompanion\app.log`.
 
 ---
 
@@ -599,12 +604,14 @@ set), `log_globs` (see above), `log_globs_fallback` (see above), `incoming_regex
 | Key | Default | Meaning |
 |---|---|---|
 | `margin_px` | `16` | Distance of the cards from the screen edge |
-| `overlay_position` | `"bottom_right"` | Corner of the usable screen area: `bottom_right`, `bottom_left`, `top_right`, `top_left` |
-| `offset_x` | `-380` | Pixels added to the horizontal position; negative = left. The default clears Bria's incoming-call toast |
-| `offset_y` | `0` | Pixels added to the vertical position; negative = up |
-| `dock_to_bria` | `false` | `true` = while Bria's toast is on screen, the cards sit directly left of it (bottoms aligned; on top of it when there is no room); otherwise the corner + offsets apply |
-| `bria_process_regex` | `"(?i)bria"` | Program file name of Bria, for `dock_to_bria` |
-| `dock_gap_px` | `12` | Gap between Bria's toast and the docked cards |
+| `placement` | `"auto"` | `auto` = bottom-right corner of the primary work area, stepping left of obstacles (0.9.0); `fixed` = `overlay_position` + offsets, no avoiding (the behaviour before 0.9.0) |
+| `avoid_gap_px` | `12` | Gap between the cards and an obstacle |
+| `bria_toast` | `"auto"` | `auto` = keep Bria's incoming-call toast area free while an incoming call rings; `off` = Bria's toast is switched off (Windows Settings > Notifications), nothing is reserved |
+| `toast_reserve_w` / `toast_reserve_h` | `380` / `230` | Size of that area (logical px from the bottom-right corner of the work area) |
+| `avoid_ignore` | `explorer.exe`, `ShellExperienceHost.exe`, `StartMenuExperienceHost.exe`, `SearchHost.exe`, `TextInputHost.exe` | Programs whose windows never count as obstacles |
+| `bria_process_regex` | `"(?i)bria"` | Program file name of Bria: its main window is avoided when it overlaps the cards (not when maximised) |
+| `overlay_position` | `"bottom_right"` | `fixed` only: corner of the usable screen area (`bottom_right`, `bottom_left`, `top_right`, `top_left`) |
+| `offset_x` / `offset_y` | `-380` / `0` | `fixed` only: pixels added to the position; negative = left / up |
 | `answered_fade_ms` | `2500` | **No longer used** since 0.4.0 (an answered call keeps its card until the call ends); kept so existing `config.json` files stay valid |
 | `missed_persistent` | `true` (read by `main.py`, not in `config.py`) | `false` = missed calls fade out like before |
 | `missed_max` | `4` (read by `main.py`, not in `config.py`) | Missed-call cards kept at once; the oldest is closed beyond that |
@@ -636,7 +643,7 @@ extension list) and `history.db` (call history).
 Example, in `%LOCALAPPDATA%\CallCompanion\config.json` (kept by updates; restart the app after editing):
 
 ```json
-{"ui": {"offset_x": -450}}
+{"ui": {"placement": "fixed", "offset_x": -450}}
 ```
 
 **`update`** (auto-update, `updater.py`)
@@ -760,8 +767,8 @@ and one-click transfer through the Bria Desktop API, extension list.
 **Road to 1.0**
 
 - **0.9.0-rc** (release candidate) in four parts: **rc.1** answer / decline / hang up from the card, transfer shown
-  only where Bria offers it, live-test fixes, ownership (done); **rc.2** dynamic card placement (corner first, step
-  aside for Bria's toast / main window and other notifications); **rc.3** call history (narrow layout, day groups, date
+  only where Bria offers it, live-test fixes, ownership (done, verified live); **rc.2** dynamic card placement
+  (corner first, step aside for Bria's toast / main window and other notifications); **rc.3** call history (narrow layout, day groups, date
   filter, row actions) and the ⚙ settings dialog (safer extension editor, Névjegy); **rc.4** Chrome extension 0.9.0
   (toolbar icon + status popup, version handshake `EXT-OLD`, store package). Transfer UI only once the provider
   enables the command.

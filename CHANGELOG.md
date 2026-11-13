@@ -3,6 +3,37 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [0.9.0-rc.2] - 2026-11-13
+
+Release candidate, part 2 of 4: the cards find their place by themselves.
+
+### Changed
+- **Card placement "corner first, step aside when occupied"** (`overlay.py`), replacing the fixed 380 px offset of
+  0.5.1. The cards' home is the bottom-right corner of the primary screen's work area. The whole stack moves left of
+  an obstacle (bottoms aligned, `ui.avoid_gap_px` 12) and slides back (~150 ms) when it is gone:
+  - **Bria's incoming-call toast**, reserved by rule while an incoming card rings (`ui.toast_reserve_w` /
+    `_h`, 380 x 230): it is a native Windows notification, invisible to any window scan (measured with
+    `tools/placement_probe.py`). Released on answer / end / missed, so a missed-call card sits in the corner.
+    `ui.bria_toast: "off"` when Bria's toast is switched off.
+  - **Bria's main window** when it is visible, overlaps the cards and is not maximised (it is not topmost, but the
+    cards would cover its buttons).
+  - **Small always-on-top pop-ups** of other programs (<= 640 x 420, e.g. Viber's). Never: the shell's own windows
+    (tray overflow, thumbnails, Start / search; `ui.avoid_ignore`), cloaked or click-through windows, full-screen
+    overlays, ordinary or maximised app windows, our own cards.
+  - No room on the left: the stack goes above the obstacles in the corner.
+  One window scan (~1-2 ms) every 300 ms only while a card is on screen (every 1 s with only missed cards); nothing
+  moves while the mouse is over a card. Every change is logged: `placement: corner|avoid <what>|above <what> -> x,y`.
+- `ui.placement: "fixed"` keeps the old behaviour (`overlay_position`, `offset_x`, `offset_y`).
+
+### Removed
+- `ui.dock_to_bria`, `ui.dock_gap_px` and the Bria-toast window search: the toast is not a window, so it could never
+  be found (keys left in a personal `config.json` are ignored).
+
+### Known issues
+- After an update or restart of the app the MiniCRM name can be missing for up to 5 minutes: the extension notices
+  the restart only at its next 5-minute heartbeat (verified live 2026-11-13). Fixed in rc.4 (extension); meanwhile
+  reload the extension (↻).
+
 ## [0.9.0-rc.1] - 2026-11-13
 
 Release candidate, part 1 of 4: call control from the card and the fixes from the live test of 0.8.0-beta.

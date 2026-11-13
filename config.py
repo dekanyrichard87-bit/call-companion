@@ -74,13 +74,17 @@ DEFAULTS = {
         "answered_fade_ms": 2500,
         "margin_px": 16,
         "end_linger_ms": 3000,                # v0.7.0: the ended card stays this long with the outcome, then fades
-        # v0.5.1: where the call cards go (read by overlay.py)
+        # v0.9.0: where the call cards go (read by overlay.py)
+        "placement": "auto",                  # auto = bottom-right corner, step aside for obstacles | fixed (below)
+        "avoid_gap_px": 12,                   # gap between the cards and an obstacle
+        "bria_toast": "auto",                 # auto = keep Bria's toast area free while a call rings | off
+        "toast_reserve_w": 380,               # that area, from the bottom-right corner of the work area
+        "toast_reserve_h": 230,
+        "bria_process_regex": "(?i)bria",     # Bria's program file name (its main window is avoided)
+        # placement "fixed" only (the behaviour before 0.9.0):
         "overlay_position": "bottom_right",   # bottom_right | bottom_left | top_right | top_left
-        "offset_x": -380,                     # px added to x (negative = left): clears Bria's incoming-call toast
+        "offset_x": -380,                     # px added to x (negative = left)
         "offset_y": 0,                        # px added to y (negative = up)
-        "dock_to_bria": False,                # True = sit left of Bria's toast when one is found (offsets otherwise)
-        "bria_process_regex": "(?i)bria",     # Bria's program file name
-        "dock_gap_px": 12,                    # gap between the toast and the docked cards
     },
     # v0.6.0: persistent call history in %LOCALAPPDATA%\CallCompanion\history.db (history.py)
     "history": {

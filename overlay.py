@@ -20,12 +20,13 @@ is live.
 Several cards can be on screen at once. They are stacked at the anchor: the live call (or a notice) nearest to it,
 the missed-call cards beyond it, the newest missed call nearest to the live call.
 
-Placement (v0.5.1, config "ui" block, read from config.load() on first use):
-    overlay_position   bottom_right | bottom_left | top_right | top_left   (corner of the usable screen area)
-    offset_x/offset_y  px added to the corner position (default offset_x = -380: clears Bria's incoming-call toast)
-    dock_to_bria       true = while Bria's toast is on screen, the cards sit directly left of it (bottoms aligned);
-                       found with one EnumWindows pass (visible + topmost + toast-sized + Bria process),
-                       re-checked every 300 ms only while a live call card is visible. Off by default.
+Placement (v0.9.0, config "ui" block, read from config.load() on first use):
+    placement          auto (default): bottom-right corner of the primary work area; the stack steps left of
+                       obstacles (Bria's toast area while an incoming call rings, Bria's main window, small topmost
+                       notification windows) and slides back when they go away. Re-checked every 300 ms only while
+                       a card is on screen (1 s with only missed cards), never while the mouse is over a card.
+                       fixed: overlay_position + offset_x / offset_y as before 0.9.0 (no avoiding).
+    avoid_gap_px, bria_toast (auto | off), toast_reserve_w / _h, avoid_ignore (process names), bria_process_regex
 """
 import ctypes
 import itertools
@@ -38,7 +39,8 @@ import time
 from ctypes import wintypes
 from urllib.parse import quote
 
-from PySide6.QtCore import QPointF, QPropertyAnimation, QRect, QRectF, QTimer, Qt, QUrl, Signal
+from PySide6.QtCore import (QAbstractAnimation, QEasingCurve, QPoint, QPointF, QPropertyAnimation, QRectF, QTimer, Qt,
+                            QUrl, Signal)
 from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
@@ -90,20 +92,33 @@ ANIM_MS = 40               # 25 fps, only while a card rings
 ANIM_CALL_MS = 66          # 15 fps for the in-call / hold icon
 
 
-# ---- placement: corner + offset, optional docking next to Bria's toast ---------------------------------------
+# ---- placement (v0.9.0): "corner first, step aside when occupied" -------------------------------------------
+# Home = bottom-right corner of the primary screen's work area. Obstacles make the whole stack move left of them
+# (bottoms aligned, gap avoid_gap_px); when they go away the stack slides back. Obstacles:
+#   * Bria's incoming-call toast, RESERVED BY RULE while an incoming card rings: it is a native Windows notification
+#     drawn by the shell and invisible to EnumWindows (measured with tools/placement_probe.py, 2026-11-12);
+#   * Bria's main window when it is visible and overlaps (it is not topmost, but the cards would cover its buttons);
+#   * small always-on-top notification windows of other programs (e.g. Viber's own pop-up).
+# ui.placement "fixed" = the old behaviour (configured corner + offset_x / offset_y, no avoiding).
 _POSITIONS = ("bottom_right", "bottom_left", "top_right", "top_left")
 _PLACEMENT = {
+    "mode": "auto",          # auto | fixed
     "position": "bottom_right",
-    "offset_x": -380,       # added to x: negative = to the left
-    "offset_y": 0,          # added to y: negative = up
-    "dock_to_bria": False,  # True = sit next to Bria's toast when one is on screen (offsets apply otherwise)
+    "offset_x": -380,        # fixed mode only: added to x (negative = left)
+    "offset_y": 0,           # fixed mode only: added to y (negative = up)
     "bria_process_regex": r"(?i)bria",
-    "dock_gap_px": 12,
+    "gap": 12,               # visible gap between the cards and an obstacle
+    "bria_toast": "auto",    # auto = reserve the toast area while an incoming call rings | off (toast switched off)
+    "toast_w": 380,          # reserved area, logical px from the bottom-right corner of the work area
+    "toast_h": 230,
+    "ignore": ["explorer.exe", "ShellExperienceHost.exe", "StartMenuExperienceHost.exe", "SearchHost.exe",
+               "TextInputHost.exe"],
 }
 _CONFIGURED = False
-_DOCK_INTERVAL_MS = 300     # re-check only while a live call card is visible and docking is on
-_DOCK_TIMER = None
-_LAST_ANCHOR = object()     # last anchor that was logged (only state changes are logged)
+_PLACE_TIMER = None
+_TICK_LIVE_MS, _TICK_IDLE_MS = 300, 1000   # live / ringing card on screen | only missed cards: slower re-check
+_SLIDE_MS = 150
+_LAST_REASON = None         # last placement reason that was logged (only changes are logged)
 
 
 def configure_placement(ui: dict) -> None:
@@ -111,20 +126,29 @@ def configure_placement(ui: dict) -> None:
     global _CONFIGURED
     d = _PLACEMENT
     pos = str(ui.get("overlay_position", d["position"])).strip().lower()
+    mode = str(ui.get("placement", d["mode"])).strip().lower()
+    toast = str(ui.get("bria_toast", d["bria_toast"])).strip().lower()
     try:
         d.update(
+            mode=mode if mode in ("auto", "fixed") else "auto",
             position=pos if pos in _POSITIONS else "bottom_right",
             offset_x=int(ui.get("offset_x", d["offset_x"])),
             offset_y=int(ui.get("offset_y", d["offset_y"])),
-            dock_to_bria=bool(ui.get("dock_to_bria", d["dock_to_bria"])),
             bria_process_regex=str(ui.get("bria_process_regex") or d["bria_process_regex"]),
-            dock_gap_px=int(ui.get("dock_gap_px", d["dock_gap_px"])),
+            gap=int(ui.get("avoid_gap_px", d["gap"])),
+            bria_toast=toast if toast in ("auto", "off") else "auto",
+            toast_w=int(ui.get("toast_reserve_w", d["toast_w"])),
+            toast_h=int(ui.get("toast_reserve_h", d["toast_h"])),
+            ignore=[str(x) for x in (ui.get("avoid_ignore") or d["ignore"])],
         )
     except (TypeError, ValueError):
         log.warning("invalid overlay placement settings in config.json, using the defaults", exc_info=True)
     _CONFIGURED = True
-    log.info("overlay placement: %s offset=(%d,%d) dock_to_bria=%s", d["position"], d["offset_x"],
-             d["offset_y"], d["dock_to_bria"])
+    if d["mode"] == "fixed":
+        log.info("overlay placement: fixed %s offset=(%d,%d)", d["position"], d["offset_x"], d["offset_y"])
+    else:
+        log.info("overlay placement: auto (corner, avoid gap %d, bria toast %s %dx%d)", d["gap"], d["bria_toast"],
+                 d["toast_w"], d["toast_h"])
 
 
 def _ensure_configured() -> None:
@@ -140,6 +164,10 @@ def _ensure_configured() -> None:
 if sys.platform == "win32":
     _user32 = ctypes.WinDLL("user32", use_last_error=True)
     _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    try:
+        _dwmapi = ctypes.WinDLL("dwmapi")
+    except OSError:
+        _dwmapi = None
     _WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     _user32.EnumWindows.argtypes = [_WNDENUMPROC, wintypes.LPARAM]
     _user32.IsWindowVisible.argtypes = [wintypes.HWND]
@@ -148,14 +176,17 @@ if sys.platform == "win32":
     _user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
     _user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
     _user32.GetWindowLongW.restype = ctypes.c_long
+    _user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
     _kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     _kernel32.OpenProcess.restype = wintypes.HANDLE
     _kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
                                                      ctypes.POINTER(wintypes.DWORD)]
     _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 
-_GWL_EXSTYLE, _WS_EX_TOPMOST, _PROCESS_QUERY_LIMITED_INFORMATION = -20, 0x0008, 0x1000
-_TOAST_MAX_W, _TOAST_MAX_H = 640, 420     # logical px: anything bigger is Bria's main window, not its toast
+_GWL_EXSTYLE, _WS_EX_TOPMOST, _WS_EX_TRANSPARENT = -20, 0x0008, 0x0020
+_PROCESS_QUERY_LIMITED_INFORMATION, _DWMWA_CLOAKED, _DWMWA_EXTENDED_FRAME_BOUNDS = 0x1000, 14, 9
+_NOTE_MAX_W, _NOTE_MAX_H = 640, 420     # logical px: a topmost window bigger than this is not a notification
+_IGNORE_CLASSES = ("TopLevelWindowForOverflowXamlIsland", "ThumbnailDeviceHelperWnd", "SnipOverlayRootWindow")
 
 
 def _exe_name(pid: int, cache: dict) -> str:
@@ -175,64 +206,133 @@ def _exe_name(pid: int, cache: dict) -> str:
     return name
 
 
-def find_bria_toast(screen):
-    """Bria's visible, always-on-top, toast-sized window on `screen` (QScreen), as a QRect in Qt logical
-    coordinates; the one nearest the bottom-right corner. None if none / not Windows / any error.
-    One EnumWindows pass, typically well under 2 ms. The px -> logical conversion assumes the primary screen
-    (origin 0,0), which is the screen the cards use."""
+def _win_rect(hwnd):
+    """Visible frame (without the invisible resize border) in physical px."""
+    r = wintypes.RECT()
+    if _dwmapi is None or _dwmapi.DwmGetWindowAttribute(hwnd, _DWMWA_EXTENDED_FRAME_BOUNDS, ctypes.byref(r),
+                                                        ctypes.sizeof(r)) != 0:
+        if not _user32.GetWindowRect(hwnd, ctypes.byref(r)):
+            return None
+    return r.left, r.top, r.right, r.bottom
+
+
+def _cloaked(hwnd) -> bool:
+    if _dwmapi is None:
+        return False
+    v = ctypes.c_int(0)
+    _dwmapi.DwmGetWindowAttribute(hwnd, _DWMWA_CLOAKED, ctypes.byref(v), ctypes.sizeof(v))
+    return v.value != 0
+
+
+def find_obstacles(screen) -> list:
+    """Windows the cards must not cover on `screen` (QScreen, the primary one): [((l, t, r, b), label)] in Qt
+    logical px (right / bottom exclusive). One EnumWindows pass (~1-2 ms). [] if not Windows / any error.
+    Qt 6 is per-monitor DPI aware, so Win32 rects are physical px; the primary screen's origin is 0,0, so
+    logical = physical / devicePixelRatio there."""
     if sys.platform != "win32" or screen is None:
-        return None
+        return []
     try:
-        rx = re.compile(_PLACEMENT["bria_process_regex"])
-        dpr = screen.devicePixelRatio() or 1.0     # Qt 6 is per-monitor DPI aware: GetWindowRect = physical px
-        area = screen.geometry()
+        p = _PLACEMENT
+        rx = re.compile(p["bria_process_regex"])
+        ignore = {n.lower() for n in p["ignore"]}
+        dpr = screen.devicePixelRatio() or 1.0
+        g = screen.geometry()
+        sl, st, sr, sb = g.left(), g.top(), g.right() + 1, g.bottom() + 1
         own_pid = os.getpid()
-        cache, hits = {}, []
+        cache, out = {}, []
+        cls_buf = ctypes.create_unicode_buffer(64)
 
         def cb(hwnd, _lparam):
             try:
                 if not _user32.IsWindowVisible(hwnd) or _user32.IsIconic(hwnd):
                     return True
-                if not (_user32.GetWindowLongW(hwnd, _GWL_EXSTYLE) & _WS_EX_TOPMOST):
+                ex = _user32.GetWindowLongW(hwnd, _GWL_EXSTYLE) & 0xFFFFFFFF
+                if ex & _WS_EX_TRANSPARENT:                 # click-through overlays never count
+                    return True
+                rect = _win_rect(hwnd)
+                if rect is None:
+                    return True
+                l, t, r, b = (round(v / dpr) for v in rect)
+                w, h = r - l, b - t
+                if w < 40 or h < 30 or r <= sl or l >= sr or b <= st or t >= sb:
                     return True
                 pid = wintypes.DWORD()
                 _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                if pid.value == own_pid or not rx.search(_exe_name(pid.value, cache)):
+                if pid.value == own_pid:
                     return True
-                r = wintypes.RECT()
-                if not _user32.GetWindowRect(hwnd, ctypes.byref(r)):
+                exe = _exe_name(pid.value, cache)
+                if exe.lower() in ignore:
                     return True
-                q = QRect(round(r.left / dpr), round(r.top / dpr),
-                          round((r.right - r.left) / dpr), round((r.bottom - r.top) / dpr))
-                if 40 <= q.width() <= _TOAST_MAX_W and 30 <= q.height() <= _TOAST_MAX_H and area.intersects(q):
-                    hits.append(q)
+                is_bria = bool(rx.search(exe))
+                if is_bria:
+                    if w >= 0.6 * (sr - sl):                # a maximised / huge Bria window: nothing to avoid
+                        return True
+                elif not (ex & _WS_EX_TOPMOST) or w > _NOTE_MAX_W or h > _NOTE_MAX_H:
+                    return True                             # ordinary app windows never count
+                _user32.GetClassNameW(hwnd, cls_buf, 64)
+                if cls_buf.value in _IGNORE_CLASSES or _cloaked(hwnd):
+                    return True
+                out.append(((l, t, r, b), f"{exe or 'pid' + str(pid.value)} {w}x{h}"))
             except Exception:
                 pass
             return True
 
         proc = _WNDENUMPROC(cb)                  # keep a reference for the duration of the call
         _user32.EnumWindows(proc, 0)
-        return max(hits, key=lambda q: q.right() + q.bottom()) if hits else None
+        return out
     except Exception:
-        log.debug("find_bria_toast failed", exc_info=True)
-        return None
+        log.debug("find_obstacles failed", exc_info=True)
+        return []
 
 
-def _ensure_dock_timer():
-    global _DOCK_TIMER
-    if _DOCK_TIMER is None:
-        _DOCK_TIMER = QTimer()
-        _DOCK_TIMER.setInterval(_DOCK_INTERVAL_MS)
-        _DOCK_TIMER.timeout.connect(_dock_tick)
-    if not _DOCK_TIMER.isActive():
-        _DOCK_TIMER.start()
+def _hits(a, b) -> bool:
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
 
-def _dock_tick():
-    # Follows the toast while it appears / slides in / disappears (answer, hang-up). Stops by itself when no live
-    # call card is left, so missed-call cards that stay for hours cost nothing.
-    if not _PLACEMENT["dock_to_bria"] or not any(isValid(w) and w.isVisible() and w._rank == 0 for w in _STACK):
-        _DOCK_TIMER.stop()
+def plan_stack(area, w: int, h: int, margin: int, gap: int, obstacles) -> tuple:
+    """Pure geometry (unit-testable): where the visible stack (w x h) goes inside `area` (l, t, r, b).
+    Returns (left, bottom, reason). Home is the bottom-right corner (margin from the edges). An obstacle that the
+    stack would touch (closer than `gap`) pushes it to its left, bottoms aligned; repeated until free. If there is
+    no room on the left, the stack goes above the obstacles in the corner column."""
+    al, at, ar, ab = area
+    right, bottom = ar - margin, ab - margin
+    x, used = right - w, []
+    for _ in range(12):
+        cand = (x - gap, bottom - h - gap, x + w + gap, bottom + gap)
+        hit = [o for o in obstacles if _hits(o[0], cand)]
+        if not hit:
+            return x, bottom, ("corner" if not used else "avoid " + ", ".join(lbl for _, lbl in used))
+        used += [o for o in hit if o not in used]
+        x = min(o[0][0] for o in hit) - gap - w
+        if x < al + margin:
+            break
+    x = right - w
+    col = (x - gap, at, right + gap, bottom + gap)
+    tops = [o[0][1] for o in obstacles if _hits(o[0], col)]
+    bottom = max(at + margin + h, min(tops) - gap) if tops else bottom
+    return x, bottom, "above " + ", ".join(lbl for _, lbl in used)
+
+
+def _ensure_place_timer(interval: int):
+    global _PLACE_TIMER
+    if _PLACE_TIMER is None:
+        _PLACE_TIMER = QTimer()
+        _PLACE_TIMER.timeout.connect(_place_tick)
+    if _PLACE_TIMER.interval() != interval:
+        _PLACE_TIMER.setInterval(interval)
+    if not _PLACE_TIMER.isActive():
+        _PLACE_TIMER.start()
+
+
+def _place_tick():
+    # Runs only while a card is on screen (auto mode): follows obstacles that appear / move / go away. Never moves
+    # the cards while the mouse is over one of them.
+    cards = [w for w in _STACK if isValid(w) and w.isVisible()]
+    if _PLACEMENT["mode"] != "auto" or not cards:
+        _PLACE_TIMER.stop()
+        return
+    _PLACE_TIMER.setInterval(_TICK_LIVE_MS if any(w._rank == 0 for w in cards) else _TICK_IDLE_MS)
+    if any(w._hover for w in cards):
         return
     CallOverlay._relayout()
 
@@ -547,16 +647,16 @@ class CallOverlay(QWidget):
         if not any(w is self for w in _STACK):
             _STACK.append(self)
         CallOverlay._relayout(self)
-        if _PLACEMENT["dock_to_bria"] and self._rank == 0:
-            _ensure_dock_timer()
+        if _PLACEMENT["mode"] == "auto":
+            _ensure_place_timer(_TICK_LIVE_MS)
 
     @staticmethod
     def _relayout(extra=None):
-        """Stack all visible cards: live call nearest the anchor, missed cards beyond it, newest first.
-        Anchor = Bria's toast (docked to its left edge, bottoms aligned) when dock_to_bria is on and a toast is
-        found; otherwise the configured corner of the usable screen area (excludes the taskbar) + offset_x/_y.
-        `extra` is a card that is placed just before it is shown."""
-        global _LAST_ANCHOR
+        """Stack all visible cards: live call at the bottom, missed cards above it, newest nearest.
+        auto mode: bottom-right corner of the primary work area, moved left of obstacles (see plan_stack);
+        fixed mode: configured corner + offset_x / offset_y. `extra` = a card placed just before it is shown
+        (moved at once); cards already on screen slide (~150 ms)."""
+        global _LAST_REASON
         _ensure_configured()
         _STACK[:] = [w for w in _STACK if isValid(w)]
         live = [w for w in _STACK if w is extra or w.isVisible()]
@@ -565,39 +665,61 @@ class CallOverlay(QWidget):
         live.sort(key=lambda w: (w._rank, -w._seq))
         scr = QGuiApplication.primaryScreen()
         area = scr.availableGeometry()
-        # The window is GLOW px bigger than the visible card on every side: shrink the margin by GLOW so the
-        # visible card edge stays where it was before v0.7.0.
-        p, m, width = _PLACEMENT, live[0]._margin - GLOW, CallOverlay.OUTER
-
-        toast = find_bria_toast(scr) if p["dock_to_bria"] else None
-        anchor = toast.getRect() if toast is not None else p["position"]
-        if anchor != _LAST_ANCHOR:
-            log.info("overlay anchor: %s", f"Bria toast {anchor}" if toast is not None else anchor)
-            _LAST_ANCHOR = anchor
-        if toast is not None:
-            gap = p["dock_gap_px"]
-            if toast.left() - gap - width >= area.left():   # room on the left: side by side, bottoms aligned
-                x, edge, downward = toast.left() - gap - width, toast.bottom() + 1, False
-            else:                                           # no room: on top of the toast
-                x, edge, downward = toast.right() + 1 - width, toast.top() - gap, False
-        else:
+        p, width = _PLACEMENT, CallOverlay.OUTER
+        if p["mode"] == "fixed":
+            # The window is GLOW px bigger than the visible card on every side: shrink the margin by GLOW.
+            m = live[0]._margin - GLOW
             pos = p["position"]
             x = area.left() + m if pos.endswith("left") else area.right() + 1 - width - m
             downward = pos.startswith("top")
             edge = area.top() + m if downward else area.bottom() + 1 - m
-            x, edge = x + p["offset_x"], edge + p["offset_y"]
-
+            x, edge, reason = x + p["offset_x"], edge + p["offset_y"], f"fixed {pos}"
+        else:
+            vis_h = sum(w.height() - 2 * GLOW for w in live) + (len(live) - 1) * (STACK_GAP + 2 * GLOW)
+            obstacles = find_obstacles(scr)
+            ar = (area.left(), area.top(), area.right() + 1, area.bottom() + 1)
+            if p["bria_toast"] != "off" and any(w._incoming_ringing() for w in live):
+                obstacles.append(((ar[2] - p["toast_w"], ar[3] - p["toast_h"], ar[2], ar[3]), "reserve bria-toast"))
+            vx, vbottom, reason = plan_stack(ar, width - 2 * GLOW, vis_h, live[0]._margin, p["gap"], obstacles)
+            x, edge, downward = vx - GLOW, vbottom + GLOW, False
         x = max(area.left(), min(x, area.right() + 1 - width))   # never off screen
+        if reason != _LAST_REASON:
+            log.info("placement: %s -> %d,%d", reason, x, edge)
+            _LAST_REASON = reason
         y = edge
         for i, w in enumerate(live):
             h = w.height()
             if downward:
                 y += STACK_GAP if i else 0
-                w.move(x, max(area.top(), min(y, area.bottom() + 1 - h)))
+                w._move_to(x, max(area.top(), min(y, area.bottom() + 1 - h)), animate=w is not extra)
                 y += h
             else:
                 y -= (STACK_GAP if i else 0) + h
-                w.move(x, max(area.top(), min(y, area.bottom() + 1 - h)))
+                w._move_to(x, max(area.top(), min(y, area.bottom() + 1 - h)), animate=w is not extra)
+
+    def _incoming_ringing(self) -> bool:
+        """An incoming call is ringing on this card: Bria's own toast is on screen (reserved by rule)."""
+        return (self._visual == "ring" and self._direction == "in" and not self._answered
+                and not self._ended and not self._closing)
+
+    def _move_to(self, x: int, y: int, animate: bool = True):
+        target = QPoint(x, y)
+        slide = getattr(self, "_slide", None)
+        if slide is not None and slide.state() == QAbstractAnimation.State.Running:
+            if slide.endValue() == target:
+                return
+            slide.stop()
+        if self.pos() == target:
+            return
+        if not animate or not self.isVisible():
+            self.move(target)
+            return
+        self._slide = QPropertyAnimation(self, b"pos", self)
+        self._slide.setDuration(_SLIDE_MS)
+        self._slide.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._slide.setStartValue(self.pos())
+        self._slide.setEndValue(target)
+        self._slide.start()
 
     def _fade(self, to: float, ms: int, then=None):
         if self._anim:
