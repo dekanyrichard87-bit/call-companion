@@ -1,4 +1,4 @@
-"""Bria capabilities probe v2: which Desktop API commands does THIS Bria accept?
+"""Bria capabilities probe v3: which Desktop API commands does THIS Bria accept?
 (Preparation for "Bria as the hidden engine": dialling, DTMF, mute, merge, bring to front ...)
 
 Part 1 - automatic and SAFE: every call-control command is sent for a NON-EXISTING call id, so nothing happens to
@@ -83,7 +83,7 @@ def main():
         lines.append(line)
 
     api = BriaApi({"timeout_s": 5}, "CallCompanion/probe")
-    out("Bria capabilities probe v2")
+    out("Bria capabilities probe v3")
     try:
         ws = api._open()
     except BriaApiError as e:
@@ -139,20 +139,30 @@ def main():
                 out("Nincs folyamatban lévő hívás a Briában - c) kihagyva.")
             else:
                 cid = xml_escape(calls[0].call_id)
-                for kind in ("dtmf", "sendDtmf", "playDtmf"):
-                    code, rb = req(kind, x(kind, f" <callId>{cid}</callId>\r\n <tone>1</tone>\r\n"))
-                    out(f"{code}  {kind} '1' valódi hívásra  {mask(rb)[:100]}")
-                    if code == 200:
-                        out("    -> hallottad a hangot a mobilon? (írd meg)")
-                        break
-                code, before = req("status", x("status", " <type>audioProperties</type>\r\n"))
-                out(f"{code}  audioProperties előtte: {mask(before)[:200]}")
-                for value in ("true", "false"):
-                    code, rb = req("audioProperties", x("audioProperties", f" <mute>{value}</mute>\r\n"))
-                    out(f"{code}  audioProperties mute={value}  {mask(rb)[:100]}")
+                input("    Tedd a füledhez a mobilt, majd nyomj Entert: 3 billentyűhangot küldök (1, 5, 9)… ")
+                for tone in "159":
+                    code, rb = req("dtmf", x("dtmf", f" <callId>{cid}</callId>\r\n <tone>{tone}</tone>\r\n"))
+                    out(f"{code}  dtmf '{tone}' valódi hívásra  {mask(rb)[:100]}")
+                    time.sleep(0.8)
+                heard = input("    Hallottál 3 rövid hangot? [i/n]: ").strip().lower()
+                out(f"    DTMF hallható: {'IGEN' if heard in ('i', 'igen', 'y') else 'NEM / nem tudni'}")
+                def mute_state():
+                    c, body = req("status", x("status", " <type>audioProperties</type>\r\n"))
+                    m = re.search(r"<mute>([^<]*)</mute>", body or "")
+                    return m.group(1) if m else f"? ({c})"
+                out(f"némítás most: {mute_state()}")
+                # v3: Bria reports enabled / disabled; try that first, then true / false; read the state after each
+                for on, off in (("enabled", "disabled"), ("true", "false")):
+                    code, rb = req("audioProperties", x("audioProperties", f" <mute>{on}</mute>\r\n"))
                     time.sleep(1.5)
-                code, after = req("status", x("status", " <type>audioProperties</type>\r\n"))
-                out(f"{code}  audioProperties utána: {mask(after)[:200]}")
+                    st = mute_state()
+                    out(f"{code}  audioProperties mute={on}  -> állapot: {st}")
+                    code, rb = req("audioProperties", x("audioProperties", f" <mute>{off}</mute>\r\n"))
+                    time.sleep(1.5)
+                    out(f"{code}  audioProperties mute={off} -> állapot: {mute_state()}")
+                    if st == "enabled":
+                        out(f"    -> a némítás MŰKÖDIK ('{on}' / '{off}' formában)")
+                        break
                 out("Ellenőrizd a Briában, hogy a némítás ki van-e kapcsolva, majd bontsd a hívást.")
     finally:
         try:
