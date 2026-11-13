@@ -3,6 +3,10 @@
 // If the app is not reachable (not started yet, restarting) it retries every 2 s for the first 2 minutes
 // (so the session arrives within seconds of the app starting), then every 15-30 s via an alarm; a content
 // script on an open MiniCRM tab additionally "pokes" this worker every 5 s while the app is not known to be up.
+// v0.9.0: every 30 s a light GET /ext/ping asks the app whether it still holds a session; an app that restarted
+// (update, quit + start) answers session=false and gets the cookies at once (was: up to 5 min until the heartbeat).
+// The toolbar icon shows a red "!" while the app is unreachable; the popup (popup.html) shows the state and has
+// a "Szinkron most" button.
 
 const APP_URL = "http://127.0.0.1:48653";      // must match config.json -> local_api host/port
 const MINICRM_URL = "https://r3.minicrm.hu/";
@@ -13,6 +17,8 @@ const COOKIE_DEBOUNCE_MS = 1500;
 const REQUEST_TIMEOUT_MS = 4000;
 const FAST_RETRY_MS = 2000;                     // quick retries right after a failed push ...
 const FAST_WINDOW_MS = 120000;                  // ... for this long, then only the alarm (and pokes) keep trying
+const CHECK_MIN = 0.5;                          // v0.9.0: restart check every 30 s (Chrome's minimum alarm period)
+const EXT_VERSION = chrome.runtime.getManifest().version;
 
 let inFlight = null;       // promise of the push in progress
 let queuedReason = null;   // a push was requested while another was running
@@ -52,7 +58,7 @@ async function fastRetry() {
 
 async function doPush(reason) {
   const cookies = await readCookies();
-  const body = JSON.stringify({ reason, cookies, userAgent: navigator.userAgent });
+  const body = JSON.stringify({ reason, cookies, userAgent: navigator.userAgent, extVersion: EXT_VERSION });
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS);
   try {
@@ -80,10 +86,12 @@ function pushSession(reason) {
       await doPush(reason);
       ok = true;
       appUp = true;
+      await setBadge(true);
       await chrome.alarms.clear("retry");
       console.log(`[CallCompanion] pushed session (${reason})`);
     } catch (e) {
       appUp = false;
+      await setBadge(false);
       if (reason !== "poke" && reason !== "retry-fast") {       // those two repeat every few seconds: stay quiet
         console.warn(`[CallCompanion] app not reachable (${reason}): ${e.message || e} - retrying`);
       }
@@ -106,6 +114,47 @@ async function ensureHeartbeat() {
   if (!(await chrome.alarms.get("heartbeat"))) {
     await chrome.alarms.create("heartbeat", { periodInMinutes: HEARTBEAT_MIN });
   }
+  if (!(await chrome.alarms.get("check"))) {
+    await chrome.alarms.create("check", { periodInMinutes: CHECK_MIN });
+  }
+}
+
+// Red "!" on the toolbar icon while the app cannot be reached; cleared on the next success.
+async function setBadge(ok) {
+  try {
+    await chrome.action.setBadgeBackgroundColor({ color: "#d20f39" });
+    await chrome.action.setBadgeText({ text: ok ? "" : "!" });
+    await chrome.action.setTitle({ title: ok ? "Call Companion – kapcsolódva" : "Call Companion – a program nem érhető el" });
+  } catch (e) { /* no action API (old Chrome): ignore */ }
+}
+
+// GET /ext/ping -> {ok, session, minicrm, lastPush, app, extWanted}; null when the app is not reachable.
+async function pingApp() {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    // POST text/plain: a "simple" request that always carries the chrome-extension:// Origin the app checks
+    const r = await fetch(APP_URL + "/ext/ping", { method: "POST", headers: { "Content-Type": "text/plain;charset=UTF-8" },
+                                                   body: "{}", signal: ctl.signal, cache: "no-store" });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Every 30 s: is the app there, and does it still have the session? (an app that restarted has none)
+async function check() {
+  if (inFlight || fastLoop) return;
+  const st = await pingApp();
+  if (!st) {
+    if (appUp !== false) { appUp = false; await setBadge(false); }
+    return;
+  }
+  if (st.session === false) pushSession("restart");
+  else if (appUp !== true) { appUp = true; await setBadge(true); }
 }
 
 chrome.runtime.onInstalled.addListener(() => { ensureHeartbeat(); pushSession("installed"); });
@@ -114,6 +163,7 @@ chrome.runtime.onStartup.addListener(() => { ensureHeartbeat(); pushSession("sta
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name === "retry") pushSession("retry");
   else if (alarm.name === "heartbeat") pushSession("heartbeat");
+  else if (alarm.name === "check") check();
 });
 
 chrome.cookies.onChanged.addListener(change => {
@@ -124,9 +174,15 @@ chrome.cookies.onChanged.addListener(change => {
 
 // The content script on an open MiniCRM tab pokes this worker every few seconds (content.js): while the app is
 // not known to be up, a poke triggers an immediate push (and keeps the worker alive).
-chrome.runtime.onMessage.addListener((msg, sender) => {
-  if (sender.id !== chrome.runtime.id || !msg || msg.type !== "poke") return;
-  if (appUp !== true && !inFlight && !fastLoop) pushSession("poke");
+// The popup asks for "sync" (Szinkron most): push now and answer with the result.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (sender.id !== chrome.runtime.id || !msg) return;
+  if (msg.type === "poke") {
+    if (appUp !== true && !inFlight && !fastLoop) pushSession("poke");
+  } else if (msg.type === "sync") {
+    pushSession("user").then(ok => sendResponse({ ok }));
+    return true;                                   // answer asynchronously
+  }
 });
 
 ensureHeartbeat();   // service worker (re)started for any reason: make sure the heartbeat exists

@@ -1,11 +1,19 @@
 {
   "manifest_version": 3,
-  "name": "Call Companion – MiniCRM session relay",
-  "version": "0.4.0",
-  "description": "Sends the MiniCRM session cookies to the local Call Companion app (127.0.0.1 only).",
+  "name": "Call Companion – MiniCRM kapcsolat",
+  "version": "0.9.0",
+  "version_name": "0.9.0-rc.4",
+  "description": "Átadja a MiniCRM-munkamenetet a gépen futó Call Companion programnak (csak a 127.0.0.1 címre).",
+  "author": "Dékány Richárd",
   "permissions": ["cookies", "alarms"],
   "host_permissions": ["https://r3.minicrm.hu/*", "http://127.0.0.1/*"],
   "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "Call Companion",
+    "default_popup": "popup.html",
+    "default_icon": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png" }
+  },
+  "icons": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
   "content_scripts": [
     {
       "matches": ["https://r3.minicrm.hu/*"],

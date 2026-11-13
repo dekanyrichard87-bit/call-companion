@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<title>Call Companion</title>
+<style>
+  body { margin: 0; width: 290px; background: #1e1e2e; color: #cdd6f4;
+         font: 13px "Segoe UI", system-ui, sans-serif; }
+  .wrap { padding: 14px 16px 16px; }
+  h1 { font-size: 15px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+  h1 img { width: 20px; height: 20px; }
+  .row { display: flex; align-items: center; gap: 10px; background: #313244; border-radius: 10px;
+         padding: 9px 12px; margin-bottom: 6px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #a6adc8; flex: none; }
+  .ok .dot { background: #a6e3a1; } .warn .dot { background: #f9e2af; } .bad .dot { background: #f38ba8; }
+  .label { color: #a6adc8; font-size: 11px; }
+  .val { font-weight: 600; }
+  .hint { color: #a6adc8; font-size: 12px; margin: 8px 2px 12px; line-height: 1.4; }
+  button { width: 100%; border: none; border-radius: 8px; padding: 9px; font: 600 13px "Segoe UI", sans-serif;
+           background: #89b4fa; color: #1e1e2e; cursor: pointer; }
+  button:hover { background: #a6c8ff; } button:disabled { background: #45475a; color: #7f849c; cursor: default; }
+  button.done { background: #a6e3a1; }
+  .foot { color: #585b70; font-size: 11px; margin-top: 10px; text-align: right; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><img src="icons/icon32.png" alt="">Call Companion</h1>
+  <div class="row" id="app"><span class="dot"></span><div><div class="label">Program</div><div class="val">…</div></div></div>
+  <div class="row" id="crm"><span class="dot"></span><div><div class="label">MiniCRM</div><div class="val">…</div></div></div>
+  <div class="row" id="sync"><span class="dot"></span><div><div class="label">Utolsó szinkron</div><div class="val">…</div></div></div>
+  <div class="hint" id="hint"></div>
+  <button id="btn">Szinkron most</button>
+  <div class="foot" id="ver"></div>
+</div>
+<script src="popup.js"></script>
+</body>
+</html>

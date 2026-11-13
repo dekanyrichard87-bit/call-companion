@@ -107,6 +107,8 @@ class StatusModel(QObject):
         self.api = HealthItem()
         self.bria_api = HealthItem(Health.UNKNOWN, "Még nem volt használva")    # v0.8.0: hold / transfer
         self.store = store
+        self.ext_version: str | None = None      # v0.9.0: None = no push yet, "" = an extension older than 0.9.0
+        self.ext_expected = ""                   # version shipped with the app
         self.started = time.monotonic()
         self.calls: list[CallRecord] = []
         if store is not None:
@@ -135,6 +137,17 @@ class StatusModel(QObject):
 
     def set_bria_api(self, state: Health, text: str) -> None:
         self._set_health("bria_api", state, text)
+
+    def set_extension_version(self, version: str, expected: str) -> None:
+        if (version, expected) != (self.ext_version, self.ext_expected):
+            self.ext_version, self.ext_expected = version, expected
+            self.changed.emit()
+
+    def extension_outdated(self) -> bool:
+        """The extension that pushed is older than the one shipped with the app (EXT-OLD)."""
+        if self.ext_version is None or not self.ext_expected:
+            return False
+        return _version_tuple(self.ext_version) < _version_tuple(self.ext_expected)
 
     def summary(self) -> Summary:
         """Plain-language state for the normal window: the most important problem first, with a short code the
@@ -165,6 +178,11 @@ class StatusModel(QObject):
         if starting and Health.UNKNOWN in (b, m, e):
             return Summary(Health.UNKNOWN, "Indítás…", "A Call Companion most kapcsolódik a Briához és a "
                                                        "MiniCRM-hez.")
+        if self.extension_outdated():
+            return Summary(Health.WARN, "Frissítse a Chrome bővítményt",
+                           "A Call Companion újabb bővítménnyel érkezett. Nyissa meg a Chrome-ban a "
+                           "chrome://extensions oldalt, és a Call Companion bővítményen kattintson a ↻ ikonra.",
+                           "EXT-OLD")
         if self.bria_api.state is Health.ERROR:
             return Summary(Health.WARN, "A kártya hívásgombjai nem működnek",
                            "A hívások figyelése rendben van. A Bria nem engedi a vezérlést: a Briában "
@@ -179,6 +197,8 @@ class StatusModel(QObject):
                  f"Bria napló: {self.bria.state.value} – {self.bria.text}",
                  f"MiniCRM: {self.minicrm.state.value} – {self.minicrm.text}",
                  f"Chrome bővítmény: {self.extension.state.value} – {self.extension.text}",
+                 f"Bővítmény verzió: {self.ext_version or ('régi (0.9 előtti)' if self.ext_version == '' else '?')}"
+                 f" (a programhoz tartozó: {self.ext_expected or '?'})",
                  f"Helyi API: {self.api.state.value} – {self.api.text}",
                  f"Bria vezérlés: {self.bria_api.state.value} – {self.bria_api.text}",
                  f"Gép: {platform.node()} • Windows {platform.release()} {platform.version()}"]
@@ -276,6 +296,14 @@ class StatusModel(QObject):
             for rec in live:
                 self.store.save(rec)
         self.changed.emit()
+
+
+def _version_tuple(v: str) -> tuple:
+    """'0.9.0' -> (0, 9, 0); missing / bad parts count as 0 ("" -> (0,), older than anything)."""
+    out = []
+    for part in str(v or "").split("-")[0].split("."):
+        out.append(int(part) if part.isdigit() else 0)
+    return tuple(out) or (0,)
 
 
 # ------------------------------------------------------------ list drawing --

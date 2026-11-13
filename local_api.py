@@ -2,7 +2,9 @@
 
 Routes
   POST /ext/session   extension -> app: MiniCRM cookies + user agent   (Origin must be chrome-extension://)
-  GET  /ext/ping      extension reachability check                     (Origin must be chrome-extension://)
+  GET|POST /ext/ping  extension reachability check (Origin must be chrome-extension://). v0.9.0: answers the app's
+                      state {ok, session, minicrm, lastPush, app, extWanted}; the extension pushes at once when
+                      session is false (the app restarted), and its popup shows the rest
   GET  /event?type=ring|answer|end&number=..&id=..[&dir=in|out][&reason=cancel|bye|rejected|failed|elsewhere]
                       manual / test call events (dir defaults to in; reason is only used with type=end)
 
@@ -26,13 +28,14 @@ REASONS = ("", "cancel", "bye", "rejected", "failed", "elsewhere")
 
 
 class LocalApi(threading.Thread):
-    def __init__(self, cfg: dict, emit_event, on_session):
+    def __init__(self, cfg: dict, emit_event, on_session, status_fn=None):
         super().__init__(daemon=True, name="local-api")
         self.cfg, self.emit_event, self.on_session = cfg, emit_event, on_session
+        self.status_fn = status_fn          # v0.9.0: () -> dict for /ext/ping (called on the server thread)
         self.httpd = None
 
     def run(self):
-        cfg, emit_event, on_session = self.cfg, self.emit_event, self.on_session
+        cfg, emit_event, on_session, status_fn = self.cfg, self.emit_event, self.on_session, self.status_fn
         port = cfg["port"]
         hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
 
@@ -64,9 +67,7 @@ class LocalApi(threading.Thread):
                     return self._send(403, {"error": "bad host"})
                 u = urlparse(self.path)
                 if u.path == "/ext/ping":
-                    if not self._from_extension():
-                        return self._send(403, {"error": "bad origin"})
-                    return self._send(200, {"ok": True})
+                    return self._ping()
                 if u.path == "/event":
                     if self.headers.get("Sec-Fetch-Site"):   # browsers always send it; curl/PowerShell don't
                         return self._send(403, {"error": "browser requests not allowed"})
@@ -83,9 +84,22 @@ class LocalApi(threading.Thread):
                     return self._send(204)
                 self._send(404, {"error": "not found"})
 
+            def _ping(self):
+                if not self._from_extension():
+                    return self._send(403, {"error": "bad origin"})
+                state = {}
+                if status_fn is not None:
+                    try:
+                        state = dict(status_fn())
+                    except Exception:
+                        log.exception("ext ping status failed")
+                return self._send(200, {"ok": True, **state})
+
             def do_POST(self):
                 if not self._host_ok():
                     return self._send(403, {"error": "bad host"})
+                if urlparse(self.path).path == "/ext/ping":
+                    return self._ping()
                 if urlparse(self.path).path != "/ext/session":
                     return self._send(404, {"error": "not found"})
                 if not self._from_extension():

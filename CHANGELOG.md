@@ -3,6 +3,32 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [0.9.0-rc.4] - 2026-11-13
+
+Release candidate, part 4 of 4: Chrome extension 0.9.0. **Reload the extension once after this update**
+(`chrome://extensions` > Call Companion > ↻); the main window reminds you with `EXT-OLD` until you do.
+
+### Fixed
+- **Names missing for up to 5 minutes after an update or restart of the app** (seen live on 2026-11-13): the
+  extension noticed a restarted app only at its next 5-minute heartbeat. It now asks the app every 30 s
+  (`/ext/ping`, one localhost request); an app without a session (it restarted) gets the cookies at once
+  (`extension push (restart)`).
+
+### Added
+- **Toolbar icon and popup** (extension 0.9.0, `popup.html` / `popup.js`, icons from the app icon): a red `!` while the
+  app is not reachable; the popup shows *Kapcsolódva ✓* / *A Call Companion nem fut*, the MiniCRM login, the last sync
+  and has a **Szinkron most** button. No new permission.
+- **Version handshake**: the extension sends its version with every push; the app compares it with the extension it
+  shipped with (`extension/manifest.json`) and shows **EXT-OLD** (*Frissítse a Chrome bővítményt*) when it is older.
+  The developer tools show the extension version, the problem report includes it.
+- `/ext/ping` (GET or POST) answers the app's state for the extension: `session`, `minicrm`, `lastPush`, `app`,
+  `extWanted`.
+- `build.ps1` writes `dist\CallCompanion-extension-<ver>.zip` (Chrome Web Store package, for the 1.0.0 publication).
+
+### Changed
+- Extension manifest: Hungarian name and description (*Call Companion – MiniCRM kapcsolat*), `author` *Dékány Richárd*,
+  `version` 0.9.0, `version_name` 0.9.0-rc.4.
+
 ## [0.9.0-rc.3] - 2026-11-13
 
 Release candidate, part 3 of 4: the call history and the settings, reworked by the UX rules.

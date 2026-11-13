@@ -59,6 +59,11 @@ $out = "dist\CallCompanion"
 if (-not (Test-Path "$out\CallCompanion.exe")) { throw "$out\CallCompanion.exe was not produced" }
 Copy-Item config.json "$out\config.json" -Force
 Copy-Item extension "$out\extension" -Recurse -Force
+# v0.9.0: the Chrome Web Store package of the extension (uploaded by hand; not part of the installer)
+$extVer = (Get-Content extension\manifest.json -Raw -Encoding UTF8 | ConvertFrom-Json).version
+$extZip = "dist\CallCompanion-extension-$extVer.zip"
+Compress-Archive -Path "extension\*" -DestinationPath $extZip -Force
+Write-Host "OK: $extZip (Chrome Web Store package)"
 if (-not (Test-Path "$out\_internal\assets\app.ico")) { throw "assets were not bundled ($out\_internal\assets\app.ico missing)" }
 Write-Host "OK: $out\CallCompanion.exe"
 

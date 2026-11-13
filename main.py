@@ -31,6 +31,17 @@ log = logging.getLogger("callcompanion")
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
+def shipped_extension_version() -> str:
+    """Version of the Chrome extension that ships with this app (extension/manifest.json next to the exe or in the
+    source folder); "" when it cannot be read."""
+    try:
+        import json
+        with open(config.app_dir() / "extension" / "manifest.json", encoding="utf-8") as fh:
+            return str(json.load(fh).get("version") or "")
+    except (OSError, ValueError):
+        return ""
+
+
 def set_autostart(enable: bool):
     """Per-user Run registry entry - for a source checkout only. The installer (installer.iss) uses a Startup-folder
     shortcut instead and removes this entry, so an installed copy is never started twice."""
@@ -98,6 +109,8 @@ class Controller(QObject):
         self.api_service = None
         self.bria_service = None
         self.ext_last = None            # time.time() of the last extension push
+        self.ext_version = None         # v0.9.0: version the extension reports ("" = too old to report it)
+        self.ext_expected = shipped_extension_version()
         self.bria_last_event = ""       # HH:MM:SS of the last call event that came from Bria
         self.status = StatusModel(store)    # everything the windows show; the call list is persistent (v0.6.0)
         self.health_timer = QTimer(self)
@@ -124,7 +137,7 @@ class Controller(QObject):
     def start_services(self):
         la = self.cfg["local_api"]
         if la["enabled"]:
-            self.api_service = LocalApi(la, self.event_sig.emit, self.ext_sig.emit)
+            self.api_service = LocalApi(la, self.event_sig.emit, self.ext_sig.emit, self.ext_status)
             self.services.append(self.api_service)
         bria = self.cfg["detectors"]["bria_log"]
         if bria["enabled"]:
@@ -175,15 +188,29 @@ class Controller(QObject):
                    if isinstance(c, dict) and isinstance(c.get("name"), str)
                    and isinstance(c.get("value"), str)]
         ua = payload.get("userAgent")
+        ver = payload.get("extVersion")
+        ver = ver if isinstance(ver, str) else ""            # extensions before 0.9.0 do not send it
+        if ver != self.ext_version:
+            log.info("extension version %s (shipped with the app: %s)", ver or "<0.9.0", self.ext_expected or "?")
+        self.ext_version = ver
+        self.status.set_extension_version(ver, self.ext_expected)
         self.ext_seen = True
         self.ext_last = time.time()
         self.status.set_extension(Health.OK, f"Utolsó szinkron {time.strftime('%H:%M:%S')} "
-                                             f"({len(cookies)} süti)")
+                                             f"({len(cookies)} süti) • bővítmény {ver or 'régi (0.9 előtti)'}")
         changed = self.client.set_extension_session(cookies, ua if isinstance(ua, str) else "")
         log.info("extension push (%s): %d cookies, changed=%s", payload.get("reason"),
                  len(cookies), changed)
         if changed or self.session_state is None:
             self.check_session()
+
+    def ext_status(self) -> dict:
+        """v0.9.0: answer of /ext/ping (local API thread): does the app hold a session (an app that restarted does
+        not -> the extension pushes at once), MiniCRM state and last sync for the extension's popup."""
+        return {"session": bool(self.client.has_session),
+                "minicrm": self.session_state if self.session_state in (True, False) else None,
+                "lastPush": time.strftime("%H:%M", time.localtime(self.ext_last)) if self.ext_last else None,
+                "app": __version__, "extWanted": self.ext_expected or None}
 
     def on_session(self, ok, msg: str):
         log.info("session state: %s %s", ok, msg)
