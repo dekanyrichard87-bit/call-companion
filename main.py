@@ -18,7 +18,7 @@ from bria_api import BriaApi, BriaApiError
 from crm import CallerInfo, MiniCrmClient
 from detectors import BriaLogDetector
 from dev_window import DevWindow
-from extensions_dialog import ExtensionsDialog
+from settings_dialog import SettingsDialog
 from events import CallEvent, normalize_number
 from history import HistoryStore
 from local_api import LocalApi
@@ -668,7 +668,6 @@ def main():
     dev.bria_api_check.connect(ctl.check_bria)
     ctl.bria_check_sig.connect(ctl.on_bria_check)
     ctl.bria_check_sig.connect(dev.bria_check_result)
-    win.edit_extensions.connect(lambda: ExtensionsDialog(settings, win).exec())
 
     def quit_app():
         win.prepare_quit()
@@ -715,8 +714,12 @@ def main():
             dev.hide()
         build_menu()
 
-    win.dev_mode_toggled.connect(set_dev_mode)
-    win.open_dev_tools.connect(dev.show_and_raise)
+    def open_settings():
+        SettingsDialog(settings, __version__, update_state=lambda: updates.state_text,
+                       check_updates=lambda: updates.check(manual=True), set_dev_mode=set_dev_mode,
+                       open_dev_tools=dev.show_and_raise, parent=win).exec()
+
+    win.open_settings.connect(open_settings)              # v0.9.0: ⚙ gear in the main window
     menu.aboutToShow.connect(build_menu)              # also refreshes the update tooltip
     build_menu()
     tray.setContextMenu(menu)

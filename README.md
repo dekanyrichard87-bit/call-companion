@@ -1,6 +1,6 @@
 # Call Companion
 
-**Version 0.9.0-rc.2** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
+**Version 0.9.0-rc.3** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
 
 Call Companion is a small tray application that watches the **Bria Enterprise** softphone and, the moment a
 call rings, shows a dark, frameless pop-up card in the bottom-right corner of the screen (it steps left of Bria's own
@@ -111,13 +111,20 @@ shows **Ismeretlen hívó** with the number below; a failed lookup shows the num
 (it is not shown as unknown, because the caller is not known to be unknown).
 
 Every call is also saved to the **call history** (`history.db`): time, direction, number, name, company, outcome, talk
-time and a transfer note. The main window shows it with filters (*Összes / Nem fogadott / Mai*) and a search box; a row
-is selected with one click and the buttons below act on it (**MiniCRM megnyitása**, **Szám másolása**,
-**Google keresés**).
+time and a transfer note. The main window shows it **grouped by day** under headers like *Ma · 12 hívás · 3 nem
+fogadott*, *Tegnap*, *Hétfő, november 10.*, *2026. október 28., kedd* (one click folds / unfolds a day; *Ma* and
+*Tegnap* are open, older days folded; a search or filter opens every day with hits). Two filter rows: *Összes / Nem
+fogadott* and *Bármikor / Mai / Tegnap / A héten / Múlt héten* (weeks Monday-Sunday); the date filter and the search
+look at the whole stored history, not only the newest 300 calls. Every row has its own actions at the right end:
+**🔍** MiniCRM (only when the caller is in MiniCRM), **📋** copy the number (turns into a green ✓), **🌐** Google —
+faint at rest, bright when the mouse is over the row; one click, no selection needed (keyboard: Enter = MiniCRM,
+Ctrl+C = copy). The time and the actions keep their place however narrow the window is.
 
 **Two levels of interface.** Normal mode (default): the tray menu has only *Állapot*, *Híváselőzmények* and *Kilépés*;
 the main window shows one plain state line ("Minden rendben • Aktív", or the problem in plain Hungarian with an error
-code and **📋 Hibajelentés másolása**) and the history. **Developer mode** (switch at the bottom of the main window)
+code and **📋 Hibajelentés másolása**) and the history. The **⚙** gear (top right) opens **Beállítások**: *Mellékek*,
+*Fejlesztői mód*, *Névjegy* (version, author, update state, *Frissítések keresése*). **Developer mode** (switch in
+Beállítások > Fejlesztői mód)
 adds *Fejlesztői eszközök*: detailed health of every part, MiniCRM re-check, Bria control check, update check, call
 simulator, live `app.log` view and "clear history"; the tray menu gets test calls, re-check and update check too.
 
@@ -145,7 +152,8 @@ simulator, live `app.log` view and "clear history"; the tray menu gets test call
 | `history.py` | `HistoryStore`: the persistent call history (SQLite `history.db`) |
 | `settings.py` | `Settings`: values changed inside the app (developer mode, extension list) in `settings.json` |
 | `bria_api.py` | `BriaApi`: Bria Desktop API client (local secure WebSocket) for answer, decline / hang up, hold, resume and transfer (only offered when this Bria knows the command) |
-| `extensions_dialog.py` | Editor for the colleagues' extensions used by **↪ Átkapcsolás** |
+| `settings_dialog.py` | **Beállítások** (⚙): Mellékek, Fejlesztői mód, Névjegy |
+| `extensions_dialog.py` | `ExtensionsEditor`: the colleagues' extensions used by **↪ Átkapcsolás** (read-only list, edit form, inline delete confirmation) |
 | `extension/` | Chrome MV3 extension: `background.js` relays the MiniCRM session cookies, `content.js` pokes the worker so the sync is fast |
 | `probe.py` | `--probe-bria`: captures what Bria writes during a test call (for adapting the parser) |
 | `updater.py` | Auto-update: checks GitHub Releases, downloads and verifies the installer, runs it silently when no call is active |
@@ -320,7 +328,7 @@ Carried over from earlier releases:
 | **Transfer is "blind"** | Bria accepts the transfer and the card says *ÁTKAPCSOLVA*; if the colleague does not pick up, Bria brings the call back by itself, but the card is already gone | Watch Bria's own window after a transfer to an extension that may be unattended |
 | **Hold changed in Bria's own window is not mirrored on the card** | The card learns the hold state only from its own button (each press first asks Bria for the real state, so it never toggles the wrong way) | - |
 | **A lost hang-up leaves the in-call card open** | The card closes on the `BYE` found in the Bria log; if the log is rotated or the line is missed, the counter keeps running | Close it with **✕** |
-| **Card placement is unverified on the office PCs** | The rules come from `tools/placement_probe.py` on the build PC (2 monitors, 150 %). Native Windows notifications of other programs (Teams, Outlook…) are invisible to the window scan, like Bria's toast; Windows stacks them in the same corner | Live test of 0.9.0-rc.2; `app.log` shows every change as `placement: corner|avoid …|above … -> x,y`. If Bria's toast is switched off in Windows, set `"bria_toast": "off"` |
+| **Card placement is verified on the build PC only** | The rules come from `tools/placement_probe.py` on the build PC (2 monitors, 150 %). Native Windows notifications of other programs (Teams, Outlook…) are invisible to the window scan, like Bria's toast; Windows stacks them in the same corner | Live test of 0.9.0-rc.2; `app.log` shows every change as `placement: corner|avoid …|above … -> x,y`. If Bria's toast is switched off in Windows, set `"bria_toast": "off"` |
 | Cards follow the **primary screen** only | Windows shows its notifications (and Bria's toast) on the primary monitor, so the cards stay there | - |
 | Missed-call cards: at most 4 | The stack must fit on the screen | `ui.missed_max` |
 | Needs Bria **Log Level = Verbose** | At lower levels Bria writes no SIP messages | Help > Troubleshooting > Support. Verbose logs grow quickly. The app opens the log only for each read, so Bria can rotate or rename it; rotation has not been tested live |
@@ -419,20 +427,19 @@ notes from the matching `CHANGELOG.md` section.
 
 Do not delete or re-tag a published release that PCs have already installed; publish a higher version instead.
 
-### Live test of 0.9.0-rc.2 (both PCs)
+### Live test of 0.9.0-rc.3 (both PCs)
 
-1. On your PC: `.\build.ps1 -Publish` (creates release `v0.9.0-rc.2`); the installed PCs update by themselves within
-   6 h, or right away with Fejlesztői mód > tray > **Frissítések keresése** (the update waits until no call is live).
-   After the update the name can be missing for up to 5 minutes (the extension notices the restart only at its next
-   heartbeat; fixed in rc.4): reload the extension (↻) to skip the wait.
-2. Incoming call: the card rings left of Bria's toast (`placement: avoid reserve bria-toast`); answer it: the card
-   slides into the corner (`placement: corner`).
-3. Bria's main window docked at the right edge, down to the taskbar: the cards stay left of it; minimise Bria: they
-   slide back.
-4. A Viber (or similar) pop-up while a card is on screen: the cards step aside and come back; with the mouse over a
-   card nothing moves.
-5. A missed call: the burgundy card stays in the corner after Bria's toast is gone.
-6. Collect the `placement:` lines of `%LOCALAPPDATA%\CallCompanion\app.log`.
+1. On your PC: `.\build.ps1 -Publish` (creates release `v0.9.0-rc.3`); update right away with the tray menu
+   (developer mode) > **Frissítések keresése**, then reload the Chrome extension (↻) so the names come at once.
+2. Main window: day headers (*Ma*, *Tegnap* open, older days folded; one click folds / unfolds), counts in the
+   headers, only hh:mm in the rows.
+3. Filters: *Nem fogadott* + *Tegnap*, *A héten*, *Múlt héten*; the empty text names the filter; a search finds an old
+   call (older than the newest 300).
+4. Row actions: faint icons, bright on hover; 🔍 opens MiniCRM, 📋 shows a green ✓, 🌐 opens Google; no 🔍 for unknown
+   callers. Make the window as narrow as it goes: no horizontal scrollbar, the time stays visible, the company tag
+   moves to the second line.
+5. ⚙ > Mellékek: add, edit, delete (confirmation), reorder; one click in the list only selects. ⚙ > Fejlesztői mód
+   switch, ⚙ > Névjegy (version, author, update state, Frissítések keresése).
 
 ---
 
@@ -457,7 +464,7 @@ python main.py
 
 The phone icon appears in the system tray. Hover it for the state. **One click** opens the main window;
 `python main.py --show` opens it at start-up. Right-click menu (normal mode): **Állapot**, **Híváselőzmények**,
-**Kilépés**. With **Fejlesztői mód** switched on (bottom of the main window) the menu adds *Fejlesztői eszközök*
+**Kilépés**. With **Fejlesztői mód** switched on (⚙ Beállítások > Fejlesztői mód) the menu adds *Fejlesztői eszközök*
 (with the version), *Teszthívás – bejövő / kimenő*, *MiniCRM újraellenőrzése* and *Frissítések keresése*. Check the
 version with `python main.py --version`.
 
@@ -491,8 +498,8 @@ Desktop API, a local secure WebSocket that Bria opens on
    again after allowing. If you clicked *Deny*, re-allow it in Bria's preferences (API / third-party access).
 2. Developer tools > **Bria vezérlés ellenőrzése** must answer *Bria válaszol (version) • N folyamatban lévő hívás •
    átkapcsolás elérhető / NEM elérhető ebben a Briában*.
-3. Main window > **☎ Mellékek…**: add the colleagues (extension number and name; one click edits a cell; ▲ ▼ set the
-   order on the card). Saved per PC in `%LOCALAPPDATA%\CallCompanion\settings.json`.
+3. Main window > **⚙** > **Mellékek**: **+ Új mellék** (extension number and name, **Mentés**); select a row and
+   **✎ Szerkesztés** / **Törlés** (asks first) / ▲ ▼ for the order on the card. The list itself cannot be typed into. Saved per PC in `%LOCALAPPDATA%\CallCompanion\settings.json`.
 4. Test: call an internal number, press **⏸ Tartás** (the caller hears Bria's hold), **▶ Folytatás**, then
    **↪ Átkapcsolás** > a colleague. **Transfer is offered only when Bria knows the command**: the app asks Bria 20 s
    after start, when a call rings (if not known yet or older than 30 min) and in the developer check, with a call id
@@ -768,8 +775,9 @@ and one-click transfer through the Bria Desktop API, extension list.
 
 - **0.9.0-rc** (release candidate) in four parts: **rc.1** answer / decline / hang up from the card, transfer shown
   only where Bria offers it, live-test fixes, ownership (done, verified live); **rc.2** dynamic card placement
-  (corner first, step aside for Bria's toast / main window and other notifications); **rc.3** call history (narrow layout, day groups, date
-  filter, row actions) and the ⚙ settings dialog (safer extension editor, Névjegy); **rc.4** Chrome extension 0.9.0
+  (corner first, step aside for Bria's toast / main window and other notifications; done, verified live); **rc.3** call
+  history (narrow layout, day groups, date filter, row actions) and the ⚙ settings dialog (safer extension editor,
+  Névjegy); **rc.4** Chrome extension 0.9.0
   (toolbar icon + status popup, version handshake `EXT-OLD`, store package). Transfer UI only once the provider
   enables the command.
 - **1.0.0** = 0.9.0-rc after a week without new issues, with the new logo; the Chrome extension is published on the
@@ -796,7 +804,7 @@ calls, acrylic blur, Chrome Web Store (unlisted) publication of the extension.
 ```
 callcompanion/
   main.py  detectors.py  events.py  local_api.py  crm.py  overlay.py  status_window.py  dev_window.py
-  history.py  settings.py  bria_api.py  extensions_dialog.py  probe.py  updater.py
+  history.py  settings.py  settings_dialog.py  bria_api.py  extensions_dialog.py  probe.py  updater.py
   config.py  config.json  version.py  requirements.txt
   extension/            manifest.json  background.js  content.js
   assets/               app.ico

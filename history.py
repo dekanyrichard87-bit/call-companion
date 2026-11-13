@@ -90,6 +90,37 @@ class HistoryStore:
             log.exception("history load failed")
             return []
 
+    def query(self, since: datetime | None = None, until: datetime | None = None, limit: int | None = None) -> list[dict]:
+        """v0.9.0: calls with since <= started < until (either end open), newest first, at most `limit`
+        (default max_rows). Used by the main window's date filter and search, which work on the whole history."""
+        if not self._db:
+            return []
+        where, args = [], []
+        if since is not None:
+            where.append("started >= ?")
+            args.append(since.isoformat(timespec="seconds"))
+        if until is not None:
+            where.append("started < ?")
+            args.append(until.isoformat(timespec="seconds"))
+        sql = f"SELECT {', '.join(FIELDS)} FROM calls"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY started DESC LIMIT ?"
+        args.append(int(limit or self.max_rows))
+        try:
+            rows = []
+            for values in self._db.execute(sql, args).fetchall():
+                row = dict(zip(FIELDS, values))
+                try:
+                    row["started"] = datetime.fromisoformat(row["started"])
+                except (TypeError, ValueError):
+                    continue
+                rows.append(row)
+            return rows
+        except sqlite3.Error:
+            log.exception("history query failed")
+            return []
+
     def save(self, rec) -> None:
         """Insert or update one call. `rec` is any object with the FIELDS as attributes (CallRecord)."""
         if not self._db:

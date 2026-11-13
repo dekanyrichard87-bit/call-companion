@@ -3,6 +3,43 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [0.9.0-rc.3] - 2026-11-13
+
+Release candidate, part 3 of 4: the call history and the settings, reworked by the UX rules.
+
+### Added
+- **Day groups in the call history** (`status_window.py`, painted by the delegate, no widgets per row): headers *Ma*,
+  *Tegnap*, *Hétfő, november 10.* (this and last week), *2026. október 28., kedd* (older), each with
+  *N hívás · M nem fogadott* (missed count in burgundy). One click on a header folds / unfolds the day (▸ / ▾);
+  *Ma* and *Tegnap* are open, older days folded; the state is kept while the app runs; a search or a filter opens
+  every day that has hits. Rows show only hh:mm.
+- **Date filter**: *Bármikor / Mai / Tegnap / A héten / Múlt héten* (weeks Monday-Sunday) in its own row, next to the
+  type filter *Összes / Nem fogadott*; filters and the search combine. The date filter and the search query the
+  whole stored history (`HistoryStore.query`, `StatusModel.history_calls`), not only the newest 300 calls in memory.
+  The empty text names the active filter (*Tegnap nem volt nem fogadott hívás.*).
+- **Row actions inside every row**: 🔍 MiniCRM (hidden when the caller is not in MiniCRM), 📋 copy (turns into a
+  green ✓ for 1.3 s), 🌐 Google; faint at rest, full colour on row hover, a soft disc under the hovered one,
+  tooltips. One click acts, no selection needed. Keyboard: Enter = MiniCRM, Ctrl+C = copy.
+- **⚙ Beállítások** (`settings_dialog.py`; gear at the top right of the main window): *Mellékek* (the extension
+  editor), *Fejlesztői mód* (switch + *Fejlesztői eszközök megnyitása*), *Névjegy* (*Call Companion <version>*,
+  *Tervezte és készítette: Dékány Richárd*, *© 2026 Dékány Richárd*, update state in Hungarian,
+  *Frissítések keresése*).
+
+### Changed
+- **Narrow window**: no horizontal scrollbar any more; the time and the row actions sit in a reserved right column
+  that never shrinks; the company tag shrinks before the name; below 480 px row width the tag moves to the second
+  line. The window's minimum width is 420 px (was 560).
+- **Safer extension editor** (`extensions_dialog.ExtensionsEditor`): the list is read-only (one click only selects;
+  no more accidental overwrites and no `editing failed` log noise); **+ Új mellék** / **✎ Szerkesztés** open a small
+  form (Mellék, Kolléga neve, Mentés / Mégse) with messages next to the fields; **Törlés** asks inline
+  (*Biztosan törli: Laci (105)?*). Nothing changes until Mentés / Igen.
+- Main window footer: only the version. *☎ Mellékek…*, *Fejlesztői eszközök* and the developer switch moved into
+  Beállítások (the tray menu keeps its developer entries).
+
+### Removed
+- The bottom action bar of the history (*MiniCRM megnyitása / Szám másolása / Google keresés* + *Válasszon ki egy
+  hívást…*), replaced by the row actions.
+
 ## [0.9.0-rc.2] - 2026-11-13
 
 Release candidate, part 2 of 4: the cards find their place by themselves.
