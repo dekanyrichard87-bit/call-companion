@@ -1,4 +1,4 @@
-"""Bria Desktop API client (v0.8.0): hold / resume / blind transfer of the running call.
+"""Bria Desktop API client (v0.8.0, v0.9.0): answer / decline / hang up, hold / resume, blind transfer.
 
 Bria (5.x / 6.x, Stretto, Enterprise) listens on a local secure WebSocket:
     wss://cpclientapi.softphone.com:9002/counterpath/socketapi/v1
@@ -14,8 +14,10 @@ TLS SNI / Host header, so no DNS lookup is needed). Messages are HTTP-like text 
     <?xml version="1.0" encoding="utf-8" ?>
     <holdCall><callId>...</callId></holdCall>
 
-Requests used: GET /status (type call / systemInformation), GET /hold, GET /resume, GET /transferCall
-(transfer needs Bria 6.2+). Bria's API call id is not the SIP Call-ID in the log, so every action first asks
+Requests used: GET /status (type call / systemInformation), GET /hold, GET /resume, GET /answer, GET /endCall
+(v0.9.0), GET /transferCall. A Bria provisioned by a provider may not offer every command: Bria then answers 400, exactly
+as for an unknown command (seen live on Bria Enterprise 6.8.8.1 for transferCall). check_transfer() checks this
+once with a bogus call id (nothing happens to real calls) so the card can hide a button that cannot work. Bria's API call id is not the SIP Call-ID in the log, so every action first asks
 GET /status "call" and picks the call whose participant number matches the card's number.
 
 The user must allow the access once in Bria (Bria shows a prompt: "Allow access always"). The WebSocket client is a
@@ -53,7 +55,15 @@ DEFAULTS = {
     "path": "/counterpath/socketapi/v1",
     "timeout_s": 3,
     "verify_tls": False,
+    "transfer": "auto",      # v0.9.0: "auto" = offer transfer only if this Bria knows transferCall | "on" | "off"
 }
+BOGUS_CALL_ID = "00000000000000000000000000000000"
+CAPS_TTL_S = 30 * 60          # re-check the transfer capability at most every 30 min (the provider may enable it)
+
+
+def _flat(body: str, n: int = 200) -> str:
+    """Response body for the log: one line, digits masked except the last 3 (no phone numbers in the log)."""
+    return re.sub(r"\d(?=\d{3})", "#", re.sub(r"\s+", " ", body or "")).strip()[:n]
 
 
 # The first request waits for Bria's permission prompt ("Allow access always"); it usually times out once.
@@ -239,6 +249,8 @@ class BriaApi:
         self.s = dict(DEFAULTS)
         self.s.update({k: v for k, v in (cfg or {}).items() if v is not None})
         self.user_agent = user_agent
+        self._transfer_ok: bool | None = None     # None = not checked yet
+        self._transfer_at = 0.0
 
     @property
     def enabled(self) -> bool:
@@ -336,8 +348,74 @@ class BriaApi:
                     version = (root.findtext(".//version") or "").strip()
             except (BriaApiError, ET.ParseError):
                 pass
-            return f"Bria válaszol{(' (' + version + ')') if version else ''} • {len(calls)} folyamatban lévő hívás"
+            caps = self._probe_transfer(ws)
+            xfer = {True: "átkapcsolás elérhető", False: "átkapcsolás NEM elérhető ebben a Briában",
+                    None: "átkapcsolás: ismeretlen"}[caps]
+            return (f"Bria válaszol{(' (' + version + ')') if version else ''} • {len(calls)} folyamatban lévő hívás"
+                    f" • {xfer}")
         return self._session(run)
+
+    # ---- v0.9.0: capability check, answer, end ---------------------------------------------------------------
+    def _probe_transfer(self, ws) -> bool | None:
+        """Does this Bria know transferCall? Sent for a call id that does not exist, so nothing happens to a real
+        call: 200 = known (Bria accepts the request), 400 = unknown / not available. Result is cached."""
+        try:
+            code, body = self._request(ws, "transferCall", f"<transferCall>\r\n <callId>{BOGUS_CALL_ID}</callId>"
+                                       f"\r\n <target>999</target>\r\n</transferCall>")
+        except BriaApiError as e:
+            log.info("bria api: transfer capability check failed: %s", e.code)
+            return self._transfer_ok
+        ok = True if code == 200 else (False if code == 400 else None)
+        if ok != self._transfer_ok:
+            log.info("bria api: capability transferCall -> %s (%s)", code,
+                     {True: "available", False: "not available", None: "unclear"}[ok])
+        self._transfer_ok, self._transfer_at = ok, time.monotonic()
+        return ok
+
+    def transfer_mode(self) -> str:
+        m = str(self.s.get("transfer", "auto")).lower()
+        return m if m in ("auto", "on", "off") else "auto"
+
+    def transfer_known(self) -> bool | None:
+        """Cached answer for the card: True / False, None = not checked yet. "on" / "off" override the check."""
+        m = self.transfer_mode()
+        if m != "auto":
+            return m == "on"
+        return self._transfer_ok
+
+    def transfer_check_due(self) -> bool:
+        return (self.enabled and self.transfer_mode() == "auto"
+                and (self._transfer_ok is None or time.monotonic() - self._transfer_at > CAPS_TTL_S))
+
+    def check_transfer(self) -> bool | None:
+        """Worker thread: refresh the transfer capability (one short connection)."""
+        return self._session(self._probe_transfer)
+
+    def answer(self, number: str) -> None:
+        """Answer the ringing call with this number (audio only). Unverified on a real call: the capabilities
+        probe only showed that this Bria knows the command."""
+        def run(ws):
+            call = self._call_for(ws, number)
+            code, body = self._request(ws, "answer", f"<answerCall>\r\n <callId>{xml_escape(call.call_id)}</callId>"
+                                       f"\r\n <withVideo>false</withVideo>\r\n</answerCall>")
+            if code != 200:
+                log.warning("bria api: answerCall %s -> %s body=%r", call.call_id, code, _flat(body))
+                raise BriaApiError("BRIA-API-HTTP", f"A Bria nem vette fel a hívást ({code})", f"answer -> {code}")
+            log.info("bria api: answerCall %s -> 200", call.call_id)
+        self._session(run)
+
+    def end_call(self, number: str) -> None:
+        """End the call with this number: declines a ringing call, hangs up a running one. Unverified on a real
+        call: which end reason Bria then writes to its log (decline vs cancel) is checked by the live test."""
+        def run(ws):
+            call = self._call_for(ws, number)
+            code, body = self._request(ws, "endCall",
+                                       f"<endCall>\r\n <callId>{xml_escape(call.call_id)}</callId>\r\n</endCall>")
+            if code != 200:
+                log.warning("bria api: endCall %s -> %s body=%r", call.call_id, code, _flat(body))
+                raise BriaApiError("BRIA-API-HTTP", f"A Bria nem bontotta a hívást ({code})", f"endCall -> {code}")
+            log.info("bria api: endCall %s -> 200", call.call_id)
+        self._session(run)
 
     def set_hold(self, number: str, hold: bool) -> bool:
         """Put the call with this number on hold (hold=True) or take it back. Returns the new hold state.
@@ -348,9 +426,10 @@ class BriaApi:
                 log.info("bria api: call %s already %s", call.call_id, "on hold" if hold else "off hold")
                 return hold
             tag = "holdCall" if hold else "resumeCall"
-            code, _ = self._request(ws, "hold" if hold else "resume",
+            code, body = self._request(ws, "hold" if hold else "resume",
                                     f"<{tag}>\r\n <callId>{xml_escape(call.call_id)}</callId>\r\n</{tag}>")
             if code != 200:
+                log.warning("bria api: %s %s -> %s body=%r", tag, call.call_id, code, _flat(body))
                 raise BriaApiError("BRIA-API-HTTP", f"A Bria nem tudta {'tartásba tenni' if hold else 'visszavenni'}"
                                    f" a hívást ({code})", f"{tag} -> {code}")
             log.info("bria api: %s %s -> 200", tag, call.call_id)
@@ -358,18 +437,20 @@ class BriaApi:
         return self._session(run)
 
     def transfer(self, number: str, target: str) -> None:
-        """Blind transfer of the call with this number to `target` (an extension). Bria 6.2+."""
+        """Blind transfer of the call with this number to `target` (an extension). Not every Bria offers it
+        (see check_transfer / the module docstring)."""
         target = re.sub(r"[^0-9*#+]", "", str(target or ""))
         if not target:
             raise BriaApiError("BRIA-API-TARGET", "Érvénytelen mellékszám")
 
         def run(ws):
             call = self._call_for(ws, number)
-            code, _ = self._request(ws, "transferCall",
-                                    f"<transferCall>\r\n <callId>{xml_escape(call.call_id)}</callId>\r\n"
-                                    f" <target>{xml_escape(target)}</target>\r\n</transferCall>")
+            code, body = self._request(ws, "transferCall",
+                                       f"<transferCall>\r\n <callId>{xml_escape(call.call_id)}</callId>\r\n"
+                                       f" <target>{xml_escape(target)}</target>\r\n</transferCall>")
             if code != 200:
-                raise BriaApiError("BRIA-API-HTTP", f"A Bria nem tudta átkapcsolni a hívást ({code}) – a Bria "
-                                   "6.2 vagy újabb verziója szükséges", f"transferCall -> {code}")
+                log.warning("bria api: transferCall %s -> %s body=%r", call.call_id, code, _flat(body))
+                raise BriaApiError("BRIA-API-HTTP", f"A Bria elutasította az átkapcsolást ({code})",
+                                   f"transferCall -> {code}")
             log.info("bria api: transferCall %s -> %s: 200", call.call_id, target)
         self._session(run)

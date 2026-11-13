@@ -32,6 +32,7 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
 AppPublisher=Dékány Richárd
+AppCopyright=© 2026 Dékány Richárd
 AppPublisherURL={#AppRepo}
 AppSupportURL={#AppRepo}/issues
 AppUpdatesURL={#AppRepo}/releases

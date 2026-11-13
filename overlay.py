@@ -66,6 +66,10 @@ QPushButton#done { background:rgba(166,227,161,55); color:#a6e3a1; }
 QPushButton#ctl { background:rgba(137,180,250,34); }
 QPushButton#ctl:hover { background:rgba(137,180,250,70); }
 QPushButton#ctl:checked { background:rgba(250,179,135,60); color:#fab387; }
+QPushButton#answer { background:rgba(166,227,161,48); color:#a6e3a1; font-weight:600; }
+QPushButton#answer:hover { background:rgba(166,227,161,95); }
+QPushButton#reject { background:rgba(243,139,168,40); color:#f38ba8; font-weight:600; }
+QPushButton#reject:hover { background:rgba(243,139,168,90); }
 QPushButton#ext { background:rgba(203,166,247,26); text-align:left; padding:6px 9px; font-size:12px; }
 QPushButton#ext:hover { background:rgba(203,166,247,70); }
 #hint { font-size:11px; color:#f38ba8; }
@@ -329,6 +333,8 @@ class CallOverlay(QWidget):
     closed = Signal()
     hold_requested = Signal(bool)            # v0.8.0: True = put on hold, False = take back
     transfer_requested = Signal(str, str)    # v0.8.0: extension number, colleague name
+    answer_requested = Signal()              # v0.9.0: ✓ Felvesz on a ringing incoming card
+    end_requested = Signal(str)              # v0.9.0: "reject" (ringing) | "hangup" (in call / dialling)
     WIDTH = 340                       # visible card width
     OUTER = WIDTH + 2 * GLOW          # window width (card + glow margin)
     LINGER_DEFAULT_MS = 3000
@@ -361,6 +367,7 @@ class CallOverlay(QWidget):
         self._hover = False
         self._held = False           # v0.8.0: on hold (Bria Desktop API)
         self._controls_on = False    # hold / transfer buttons offered (bria_api.enabled)
+        self._transfer_on = False    # v0.9.0: transfer offered only when this Bria knows the command
         self._extensions: list = []
         self._tick = QTimer(self)    # drives the duration label
         self._tick.setInterval(250)
@@ -408,6 +415,26 @@ class CallOverlay(QWidget):
         for w in (self.lbl_name, self.lbl_number):           # name / number can be selected with the mouse
             w.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 
+        # v0.9.0 while ringing: ✓ Felvesz / ✕ Elutasít (incoming) or ✕ Bontás (a call we dial)
+        self.ring_controls = QWidget()
+        rrow = QHBoxLayout(self.ring_controls)
+        rrow.setContentsMargins(0, 8, 0, 0)
+        rrow.setSpacing(8)
+        self.btn_answer = QPushButton("✓ Felvesz")
+        self.btn_answer.setObjectName("answer")
+        self.btn_answer.setToolTip("A hívás fogadása")
+        self.btn_reject = QPushButton("✕ Elutasít")
+        self.btn_reject.setObjectName("reject")
+        self.btn_reject.setToolTip("A hívás elutasítása")
+        for b in (self.btn_answer, self.btn_reject):
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            rrow.addWidget(b)
+        self.btn_answer.clicked.connect(self._request_answer)
+        self.btn_reject.clicked.connect(
+            lambda: self._request_end("hangup" if self._direction == "out" else "reject"))
+        root.addWidget(self.ring_controls)
+        self.ring_controls.setVisible(False)
+
         # v0.8.0 call control (only while a call is live): hold / resume and transfer to a saved extension
         self.controls = QWidget()
         crow = QHBoxLayout(self.controls)
@@ -420,9 +447,13 @@ class CallOverlay(QWidget):
         self.btn_xfer.setObjectName("ctl")
         self.btn_xfer.setCheckable(True)
         self.btn_xfer.setToolTip("A hívás átkapcsolása egy kollégához")
-        for b in (self.btn_hold, self.btn_xfer):
+        self.btn_hangup = QPushButton("✕ Bontás")
+        self.btn_hangup.setObjectName("reject")
+        self.btn_hangup.setToolTip("A hívás befejezése")
+        for b in (self.btn_hold, self.btn_xfer, self.btn_hangup):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             crow.addWidget(b)
+        self.btn_hangup.clicked.connect(lambda: self._request_end("hangup"))
         self.btn_hold.clicked.connect(lambda: self._request_hold(not self._held))
         self.btn_xfer.toggled.connect(self._toggle_xfer_panel)
         root.addWidget(self.controls)
@@ -603,6 +634,7 @@ class CallOverlay(QWidget):
         else:
             self._set_visual("ring", INCOMING_GREEN, "BEJÖVŐ HÍVÁS")
         self._lines(number or "Ismeretlen szám", "", "Keresés a MiniCRM-ben…")
+        self._show_ring_controls()
         self.btn_crm.setEnabled(False)
         self.actions.setVisible(True)
         self.setWindowOpacity(0.0)
@@ -647,7 +679,10 @@ class CallOverlay(QWidget):
         self.lbl_timer.setText(format_duration(0))
         self.lbl_timer.setVisible(True)
         self._tick.start()
+        self.ring_controls.setVisible(False)
         self.controls.setVisible(self._controls_on)
+        self._busy(False)
+        self.lbl_hint.setVisible(False)
         self._place()
 
     def _update_timer(self):
@@ -808,14 +843,36 @@ class CallOverlay(QWidget):
         QTimer.singleShot(ms, restore)
 
     # ---- v0.8.0: hold / transfer -------------------------------------------------------------------------
-    def set_call_controls(self, enabled: bool, extensions=()):
-        """Offer hold / transfer on this card (bria_api.enabled) and the saved extensions [(number, name)]."""
+    def set_call_controls(self, enabled: bool, extensions=(), transfer: bool = False):
+        """Offer call control on this card (bria_api.enabled): answer / decline while ringing, hold / hang up in a
+        call, and transfer to the saved extensions [(number, name)] only when `transfer` (v0.9.0: this Bria knows
+        the command; the button is hidden otherwise instead of failing with 400)."""
         self._controls_on = bool(enabled)
+        self._transfer_on = bool(enabled and transfer)
         self._extensions = list(extensions or [])
+        self.btn_xfer.setVisible(self._transfer_on)
+        if not self._transfer_on:
+            self.btn_xfer.blockSignals(True)
+            self.btn_xfer.setChecked(False)
+            self.btn_xfer.blockSignals(False)
+            self.xfer_panel.setVisible(False)
         self._build_xfer_panel()
-        if self._answered and not (self._ended or self._closing or self._missed):
+        if self._closing or self._ended or self._missed:
+            return
+        if self._answered:
             self.controls.setVisible(self._controls_on)
-            self._place()
+        else:
+            self._show_ring_controls()
+        self._place()
+
+    def _show_ring_controls(self):
+        """Ringing: ✓ Felvesz + ✕ Elutasít for an incoming call, only ✕ Bontás for a call we dial."""
+        on = self._controls_on and not (self._answered or self._ended or self._closing or self._missed)
+        out = self._direction == "out"
+        self.btn_answer.setVisible(not out)
+        self.btn_reject.setText("✕ Bontás" if out else "✕ Elutasít")
+        self.btn_reject.setToolTip("A hívás megszakítása" if out else "A hívás elutasítása")
+        self.ring_controls.setVisible(on)
 
     def _build_xfer_panel(self):
         while self._xfer_grid.count():
@@ -842,6 +899,7 @@ class CallOverlay(QWidget):
         self._place()
 
     def _hide_controls(self):
+        self.ring_controls.setVisible(False)
         self.controls.setVisible(False)
         self.xfer_panel.setVisible(False)
         self.lbl_hint.setVisible(False)
@@ -850,7 +908,7 @@ class CallOverlay(QWidget):
         self.btn_xfer.blockSignals(False)
 
     def _busy(self, on: bool, text: str = ""):
-        for b in (self.btn_hold, self.btn_xfer):
+        for b in (self.btn_hold, self.btn_xfer, self.btn_hangup, self.btn_answer, self.btn_reject):
             b.setEnabled(not on)
         for i in range(self._xfer_grid.count()):
             w = self._xfer_grid.itemAt(i).widget()
@@ -868,6 +926,18 @@ class CallOverlay(QWidget):
             return
         self._busy(True, "Tartásba tétel…" if hold else "Visszavétel…")
         self.hold_requested.emit(hold)
+
+    def _request_answer(self):
+        if self._closing or self._ended or self._answered or self._missed:
+            return
+        self._busy(True, "Felvétel…")
+        self.answer_requested.emit()
+
+    def _request_end(self, kind: str):
+        if self._closing or self._ended or self._missed:
+            return
+        self._busy(True, "Elutasítás…" if kind == "reject" else "Bontás…")
+        self.end_requested.emit(kind)
 
     def _request_transfer(self, number: str, name: str):
         if self._closing or self._ended or not self._answered:

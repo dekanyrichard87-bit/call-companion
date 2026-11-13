@@ -93,7 +93,8 @@ class StatusModel(QObject):
     changed = Signal()
     recheck_finished = Signal()      # emitted by main.Controller.on_session after every session check
     MAX_CALLS = 300                  # kept in memory / shown; the database keeps more (history.max_rows)
-    STARTUP_GRACE_S = 25             # "Indítás…" instead of a warning while the extension is still connecting
+    STARTUP_GRACE_S = 60             # "Indítás…" instead of a warning while the extension is still connecting
+                                     # (v0.9.0: was 25 s, shorter than the extension's retry / alarm)
 
     def __init__(self, store=None) -> None:
         super().__init__()
@@ -162,7 +163,7 @@ class StatusModel(QObject):
             return Summary(Health.UNKNOWN, "Indítás…", "A Call Companion most kapcsolódik a Briához és a "
                                                        "MiniCRM-hez.")
         if self.bria_api.state is Health.ERROR:
-            return Summary(Health.WARN, "A Tartás / Átkapcsolás gomb nem működik",
+            return Summary(Health.WARN, "A kártya hívásgombjai nem működnek",
                            "A hívások figyelése rendben van. A Bria nem engedi a vezérlést: a Briában "
                            "engedélyezze az alkalmazások hozzáférését.", "BRIA-API")
         return Summary(Health.OK, "Minden rendben • Aktív", "A Call Companion figyeli a hívásokat.")

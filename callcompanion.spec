@@ -22,7 +22,8 @@ with open(VERSION_FILE, "w", encoding="utf-8") as fh:
                     fileType=0x1, subtype=0x0, date=(0, 0)),
   kids=[
     StringFileInfo([StringTable('040904B0', [
-      StringStruct('CompanyName', 'Dekoros Muvek Kft.'),
+      StringStruct('CompanyName', 'Dékány Richárd'),
+      StringStruct('LegalCopyright', '© 2026 Dékány Richárd'),
       StringStruct('FileDescription', 'Call Companion - Bria / MiniCRM caller pop-up'),
       StringStruct('FileVersion', '{VERSION}'),
       StringStruct('InternalName', 'CallCompanion'),

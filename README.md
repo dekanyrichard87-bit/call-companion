@@ -1,6 +1,6 @@
 # Call Companion
 
-**Version 0.8.0-beta** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
+**Version 0.9.0-rc.1** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
 
 Call Companion is a small tray application that watches the **Bria Enterprise** softphone and, the moment a
 call rings, shows a dark, frameless pop-up card near the bottom-right corner of the screen, just left of Bria's own
@@ -8,8 +8,9 @@ call notification. The card shows the
 caller's number immediately and, a moment later, the caller's **name from MiniCRM** and, a little later still, the
 caller's **company**, with one-click buttons to open the contact in MiniCRM, search the number on Google, or copy it.
 While you talk, the card stays open and counts the call duration; a **missed call** stays on screen until you close
-it; and **outgoing calls** get the same card and lookup for the number you dial. During a call the card can put the
-caller **on hold** and **transfer** the call to a colleague's extension with one click (Bria Desktop API). One click on
+it; and **outgoing calls** get the same card and lookup for the number you dial. The card can **answer** or **decline**
+a ringing call, put the caller **on hold**, **hang up**, and, where Bria allows it, **transfer** the call to a
+colleague's extension with one click (Bria Desktop API). One click on
 the tray icon opens the **main window**: a plain "everything OK" line and the **persistent call history** (name and
 company, outcome, talk time; kept across restarts). Technical tools live in a separate **developer mode**.
 
@@ -58,7 +59,8 @@ an entry in *Settings > Apps* for uninstalling, and **automatic updates** from t
 
 1. Bria logs the SIP `INVITE`. `BriaLogDetector` reads the caller from the `From:` header, normalises it
    (`00036301234567` -> `+36301234567`) and emits a `ringing` event.
-2. The controller shows the card **at once** with the number and "Looking up...".
+2. The controller shows the card **at once** with the number and "Looking up...", with **✓ Felvesz** and
+   **✕ Elutasít** (a call you dial gets **✕ Bontás**).
 3. A background thread asks MiniCRM for that number (see [lookup](#minicrm-lookup)), normally in about 360 ms. The card
    updates with the **name** and enables the MiniCRM button. Repeat callers are answered from an in-memory cache.
 4. **Stage 2, in the background:** if the name is known but no company came with it, a second request fetches the
@@ -66,8 +68,9 @@ an entry in *Settings > Apps* for uninstalling, and **automatic updates** from t
    for it. If the request fails or finds no company, nothing changes on the card.
 5. When you answer, the card stays open as a **HÍVÁSBAN** card with animated sound-wave bars and a live duration
    counter (`00:15`, `01:42`, then `1:02:03`) and keeps the name, company, number and buttons. It adds
-   **⏸ Tartás** (hold / **▶ Folytatás**) and **↪ Átkapcsolás**, which opens the saved colleagues on the card: one click
-   on a name transfers the call (see [Bria call control](#2b-bria-call-control-hold-and-transfer)).
+   **⏸ Tartás** (hold / **▶ Folytatás**), **✕ Bontás** and, only if this Bria offers transfer, **↪ Átkapcsolás**, which
+   opens the saved colleagues on the card: one click on a name transfers the call (see
+   [Bria call control](#2b-bria-call-control-hold-and-transfer)).
 6. When the call ends (`BYE`) the card stays for 3 s with **HÍVÁS BEFEJEZVE** and the final talk time (or
    **ÁTKAPCSOLVA**, **ELUTASÍTVA**, **MÁSHOL FOGADTÁK**, **NEM VETTÉK FEL**), then fades out. The mouse over the card
    pauses this.
@@ -83,9 +86,10 @@ an entry in *Settings > Apps* for uninstalling, and **automatic updates** from t
 ```
  ((•)) BEJÖVŐ HÍVÁS                               ✕     (KIMENŐ HÍVÁS / HÍVÁSBAN 01:42 / TARTVA / NEM FOGADOTT HÍVÁS ×2 · 08:41)
  Neupert Márk                  line 1  name: large, bold
- Dekoros Művek Kft.            line 2  company: medium (hidden when MiniCRM has none)
+ Minta Kft.                    line 2  company: medium (hidden when MiniCRM has none)
  +36 30 525 6058               line 3  phone number: small, muted
- [ ⏸ Tartás ] [ ↪ Átkapcsolás ]          only during a call
+ [ ✓ Felvesz ] [ ✕ Elutasít ]                     only while ringing (a call you dial: [ ✕ Bontás ])
+ [ ⏸ Tartás ] [ ↪ Átkapcsolás ] [ ✕ Bontás ]       only during a call; ↪ only if this Bria offers transfer
    [ Kovács Péter · 102 ] [ Nagy Éva · 103 ]   after ↪ Átkapcsolás: one click transfers
  [ 🔍 MiniCRM ] [ 🌐 Google ] [ 📋 Másolás ]
 ```
@@ -124,7 +128,7 @@ simulator, live `app.log` view and "clear history"; the tray menu gets test call
 | `EXT-OFFLINE` | Nincs kapcsolat a Chrome-mal | Open Chrome with MiniCRM; check that the extension is on |
 | `MINICRM-NET` | A MiniCRM most nem érhető el | Internet connection |
 | `API-PORT` | A program egy része nem tudott elindulni | Port 48653 is taken: restart the PC |
-| `BRIA-API` | A Tartás / Átkapcsolás gomb nem működik | Allow the app in Bria's API prompt; Bria running? |
+| `BRIA-API` | A kártya hívásgombjai nem működnek | Allow the app in Bria's API prompt; Bria running? |
 
 **Components**
 
@@ -140,7 +144,7 @@ simulator, live `app.log` view and "clear history"; the tray menu gets test call
 | `dev_window.py` | `DevWindow`: developer tools (health details, re-checks, simulator, live log) |
 | `history.py` | `HistoryStore`: the persistent call history (SQLite `history.db`) |
 | `settings.py` | `Settings`: values changed inside the app (developer mode, extension list) in `settings.json` |
-| `bria_api.py` | `BriaApi`: Bria Desktop API client (local secure WebSocket) for hold, resume and transfer |
+| `bria_api.py` | `BriaApi`: Bria Desktop API client (local secure WebSocket) for answer, decline / hang up, hold, resume and transfer (only offered when this Bria knows the command) |
 | `extensions_dialog.py` | Editor for the colleagues' extensions used by **↪ Átkapcsolás** |
 | `extension/` | Chrome MV3 extension: `background.js` relays the MiniCRM session cookies, `content.js` pokes the worker so the sync is fast |
 | `probe.py` | `--probe-bria`: captures what Bria writes during a test call (for adapting the parser) |
@@ -201,7 +205,7 @@ the same background request MiniCRM's own contact page sends when you open `#Add
 
 ```
 POST https://r3.minicrm.hu/60171/Batch    (two requests in one: Rpc/Account/MainInfo/<id> and Rpc/Account/DetailedInfo/<id>)
--> {"Rpc/Account/MainInfo/<id>": {"Status": 200, "Body": {"BusinessRelated": {"Name": "Dekoros Művek Kft."}, ...}}, ...}
+-> {"Rpc/Account/MainInfo/<id>": {"Status": 200, "Body": {"BusinessRelated": {"Name": "Minta Kft."}, ...}}, ...}
 ```
 
 - The company is read from `Body > BusinessRelated > Name`. Without a `company_path` the app searches the answer for
@@ -237,7 +241,7 @@ The MiniCRM button keeps pointing at the profile of the shown name, even when th
 
 ## What works in this release
 
-New on the road to 1.0 (0.6.0 - 0.8.0, see the CHANGELOG):
+New on the road to 1.0 (0.6.0 - 0.9.0-rc.1, see the CHANGELOG):
 
 - **Persistent call history** with name and highlighted company, outcome, talk time, transfer note; filters and search.
 - **Normal mode vs developer mode**: plain main window and short tray menu for everyone; technical tools behind a switch.
@@ -245,8 +249,9 @@ New on the road to 1.0 (0.6.0 - 0.8.0, see the CHANGELOG):
 - **No double-clicks**: one click on the tray icon, one click to select a call, dedicated buttons for every action.
 - **Animated card states** (ringing glow + icon wiggle, in-call sound waves, hold, burgundy missed card) and a 3 s
   **linger** with the outcome before the card fades; green confirmation on copy and other quick actions.
-- **Hold / resume** and **one-click transfer** to saved extensions from the card (Bria Desktop API, untested against a
-  real Bria yet).
+- **Hold / resume** from the card (verified live on Bria Enterprise 6.8.8.1) and **one-click transfer** to saved
+  extensions (Bria Desktop API), shown only when Bria offers transfer (0.9.0-rc.1).
+- **Answer / decline / hang up** from the card (0.9.0-rc.1, unverified on a real call yet).
 
 Carried over from earlier releases:
 
@@ -308,7 +313,8 @@ Carried over from earlier releases:
 | One **live** call card at a time | A new ringing call replaces the previous live card (a call that was answered or still ringing then has no card any more); missed-call cards are kept | - |
 | **Outgoing calls are unverified against a real Bria log** | The outgoing INVITE layout (dialled number in the `To` header, 401/407 challenges) was built from the SIP standard and the `Transmitting to` marker, not from a captured call | Run `python main.py --probe-bria 90`, place an outgoing test call and check `Parser recognised ...: ['ringing','answered','ended']`; keep `bria_probe.txt` if not |
 | **"Answered elsewhere" is unverified** | A call picked up on another phone is told apart from a missed call by the `Reason: ... completed elsewhere` header of the CANCEL; whether your PBX sends it is not known | If such calls leave a missed-call card, send the CANCEL lines from `--probe-bria` |
-| **Hold / transfer are unverified against a real Bria** | `bria_api.py` follows CounterPath's Desktop API guide and sample (secure WebSocket on port 9002, `GET /status`, `/hold`, `/resume`, `/transferCall`) and was tested against a fake Bria only. Transfer needs Bria **6.2+** | Developer tools > **Bria vezérlés ellenőrzése** first; then a test call with **⏸ Tartás** and **↪ Átkapcsolás** to an internal extension. If it fails, the card shows the reason and `app.log` has `bria api: ...` lines |
+| **Transfer is not available on a provider-provisioned Bria** | Bria Enterprise 6.8.8.1 provisioned by Opennetworks answers `transferCall` (and attended transfer, recording) with 400, exactly like an unknown command; hold / resume work. Asked the provider to enable it (no answer yet, 2026-11-13) | The app checks this by itself and hides **↪ Átkapcsolás** (`bria api: capability transferCall -> 400`); if the provider enables it, the button appears without an update. Meanwhile transfer in Bria's own window |
+| **Answer / decline / hang up are unverified on a real call** | Bria knows `answer` and `endCall` (capabilities probe, bogus call id), but they were not yet sent for a real call. Which end reason Bria logs after **✕ Elutasít** is unknown; the app never shows such a call as missed | Live test of 0.9.0-rc.1; `app.log`: `bria api: answerCall|endCall <id> -> 200`, `call <id> declined from the card (log reason ...)` |
 | **Transfer is "blind"** | Bria accepts the transfer and the card says *ÁTKAPCSOLVA*; if the colleague does not pick up, Bria brings the call back by itself, but the card is already gone | Watch Bria's own window after a transfer to an extension that may be unattended |
 | **Hold changed in Bria's own window is not mirrored on the card** | The card learns the hold state only from its own button (each press first asks Bria for the real state, so it never toggles the wrong way) | - |
 | **A lost hang-up leaves the in-call card open** | The card closes on the `BYE` found in the Bria log; if the log is rotated or the line is missed, the counter keeps running | Close it with **✕** |
@@ -411,17 +417,17 @@ notes from the matching `CHANGELOG.md` section.
 
 Do not delete or re-tag a published release that PCs have already installed; publish a higher version instead.
 
-### Live test of 0.8.0-beta (both PCs)
+### Live test of 0.9.0-rc.1 (both PCs)
 
-1. On your PC: `.\build.ps1 -Publish` (creates release `v0.8.0-beta`); the installed PCs update by themselves within
+1. On your PC: `.\build.ps1 -Publish` (creates release `v0.9.0-rc.1`); the installed PCs update by themselves within
    6 h, or right away with Fejlesztői mód > tray > **Frissítések keresése** (the update waits until no call is live).
-2. Main window (one click on the tray icon): *Minden rendben • Aktív*; the old calls are not there yet (the history
-   starts with this version) — make one call and restart the app: it must still be listed, with the company.
-3. **☎ Mellékek…**: add two colleagues. Switch on **Fejlesztői mód** > *Fejlesztői eszközök* > **Bria vezérlés
-   ellenőrzése** (allow the access in Bria's prompt the first time).
-4. Real call: ringing glow, *HÍVÁSBAN* waves, **⏸ Tartás** / **▶ Folytatás**, **↪ Átkapcsolás** to a colleague, then a
-   missed call (burgundy card) and an ended call (*HÍVÁS BEFEJEZVE* for 3 s).
-5. If something fails, collect `%LOCALAPPDATA%\CallCompanion\app.log` and `update-install.log`.
+2. Restart the app: the main window shows *Indítás…*, then *Minden rendben • Aktív*, without an `EXT-OFFLINE` flash.
+3. Developer tools > **Bria vezérlés ellenőrzése**: *… • átkapcsolás NEM elérhető ebben a Briában*.
+4. Real incoming call: **✓ Felvesz** answers it (card turns *HÍVÁSBAN*); no **↪ Átkapcsolás** button; **✕ Bontás**
+   ends it (*HÍVÁS BEFEJEZVE*). Second call: **✕ Elutasít** (card *ELUTASÍTVA*, no missed-call card, history
+   *Elutasítva*). Outgoing call: **✕ Bontás** while it rings.
+5. Collect `%LOCALAPPDATA%\CallCompanion\app.log` (lines `bria api: answerCall|endCall`, `declined from the card`);
+   on the colleague's PC also `update-install.log` (0.8.0-beta did not update there).
 
 ---
 
@@ -471,17 +477,22 @@ To try only the pop-up (no Bria, no MiniCRM) set `"mock": true` in `config.json`
 
 ### 2b. Bria call control (hold and transfer)
 
-The **⏸ Tartás** and **↪ Átkapcsolás** buttons use the Bria Desktop API, a local secure WebSocket that Bria opens on
+The card's call buttons (**✓ Felvesz**, **✕ Elutasít**, **✕ Bontás**, **⏸ Tartás**, **↪ Átkapcsolás**) use the Bria
+Desktop API, a local secure WebSocket that Bria opens on
 `127.0.0.1:9002` (`cpclientapi.softphone.com`). Nothing leaves the PC.
 
 1. The first time the app talks to Bria, **Bria asks for permission**: choose **Allow access always** (the
    *Call Companion* request). That first request usually times out while the prompt waits for you; press the button
    again after allowing. If you clicked *Deny*, re-allow it in Bria's preferences (API / third-party access).
-2. Developer tools > **Bria vezérlés ellenőrzése** must answer *Bria válaszol (version) • N folyamatban lévő hívás*.
+2. Developer tools > **Bria vezérlés ellenőrzése** must answer *Bria válaszol (version) • N folyamatban lévő hívás •
+   átkapcsolás elérhető / NEM elérhető ebben a Briában*.
 3. Main window > **☎ Mellékek…**: add the colleagues (extension number and name; one click edits a cell; ▲ ▼ set the
    order on the card). Saved per PC in `%LOCALAPPDATA%\CallCompanion\settings.json`.
 4. Test: call an internal number, press **⏸ Tartás** (the caller hears Bria's hold), **▶ Folytatás**, then
-   **↪ Átkapcsolás** > a colleague. Transfer needs **Bria 6.2 or newer**.
+   **↪ Átkapcsolás** > a colleague. **Transfer is offered only when Bria knows the command**: the app asks Bria 20 s
+   after start, when a call rings (if not known yet or older than 30 min) and in the developer check, with a call id
+   that does not exist (nothing happens to real calls). A provider-provisioned Bria may have it switched off (see the
+   known limits); `bria_api.transfer` = `"on"` / `"off"` overrides the check.
 
 Every action first asks Bria which calls are running and picks the one whose number matches the card (with exactly
 one call in Bria, that one). `"bria_api": {"enabled": false}` hides the buttons.
@@ -607,11 +618,12 @@ set), `log_globs` (see above), `log_globs_fallback` (see above), `incoming_regex
 | `retention_days` | `90` | Calls older than this are deleted at start |
 | `max_rows` | `2000` | At most this many calls are kept |
 
-**`bria_api`** (hold / transfer, `bria_api.py`)
+**`bria_api`** (call control from the card, `bria_api.py`)
 
 | Key | Default | Meaning |
 |---|---|---|
-| `enabled` | `true` | `false` = no **Tartás** / **Átkapcsolás** buttons |
+| `enabled` | `true` | `false` = no call buttons on the card |
+| `transfer` | `"auto"` | `"auto"` = show **↪ Átkapcsolás** only if this Bria knows `transferCall`; `"on"` = always; `"off"` = never |
 | `host` | `"cpclientapi.softphone.com"` | Host name sent in TLS SNI and the `Host` header |
 | `connect_host` | `"127.0.0.1"` | Where the connection goes (no DNS lookup) |
 | `port` / `path` | `9002` / `"/counterpath/socketapi/v1"` | Bria's API endpoint |
@@ -679,10 +691,14 @@ Everything is logged to `%LOCALAPPDATA%\CallCompanion\app.log` (cookies and resp
 | `history: pruned N old + M over-limit row(s)` | Old calls removed at start (`history` block) |
 | `bria action hold\|transfer for call ...` then `bria api: N call(s) in Bria, match for ...1234 -> <id>` | A card button was pressed; Bria listed its calls and the matching one was found |
 | `bria api: holdCall\|resumeCall <id> -> 200`, `bria api: transferCall <id> -> 102: 200` | Bria accepted the action |
+| `bria api: answerCall\|endCall <id> -> 200` | ✓ Felvesz / ✕ Elutasít / ✕ Bontás was accepted by Bria (the card changes when the log reports it) |
+| `call <id> declined from the card (log reason ...)` | A call declined with ✕ Elutasít; the reason shows what Bria logged (kept as *Elutasítva*, never as missed) |
+| `bria api: capability transferCall -> 400 (not available)` / `-> 200 (available)` | Result of the transfer check: ↪ Átkapcsolás hidden / shown |
+| `bria api: <request> <id> -> 4xx body='...'` | Bria refused a request; the body (digits masked) is logged for diagnosis |
 | `bria action ... failed: BRIA-API-OFF` | Bria is not running or its API is off (card: *A Bria nem fogad vezérlést*) |
 | `BRIA-API-CLOSED` / `BRIA-API-HANDSHAKE` | Bria refused the connection: allow access in Bria's prompt / preferences |
 | `BRIA-API-NOCALL` | Bria lists no call with the card's number (several calls at once with a different number format?) |
-| `BRIA-API-HTTP ... transferCall -> 4xx` | Bria rejected the transfer: Bria older than 6.2, or the extension does not exist |
+| `BRIA-API-HTTP ... transferCall -> 4xx` | Bria rejected the transfer: the command is switched off in this Bria (provider), or the extension does not exist |
 | `problem report copied to the clipboard (CODE)` | The user pressed **Hibajelentés másolása** |
 | `attempt 1/3 term=... type=Person page=1 -> HTTP 200 ... items=1 types={'Person': 1}` | The Person search works and found a person. One `attempt` line per lookup is the normal case. `body keys=[...]` at the end of the line shows whether MiniCRM sends a page or total count |
 | `attempt 1/3 ... items=0 types={}` on every spelling, then `attempt deals term=... type=- page=1` | No person has that number; the deal fallback is being tried |
@@ -718,7 +734,7 @@ Everything is logged to `%LOCALAPPDATA%\CallCompanion\app.log` (cookies and resp
   names and companies, outcome, talk time, for 90 days / 2000 calls. It never leaves the PC. Clear it in the developer
   tools (*Híváselőzmények törlése…*) or delete the file while the app is not running. The **problem report** contains
   the state of each part and the PC name, no caller data.
-- **Bria control** (hold / transfer) talks only to Bria on `127.0.0.1:9002`; it sends the Bria call id and, for a
+- **Bria control** (answer, decline, hang up, hold, transfer and the transfer check) talks only to Bria on `127.0.0.1:9002`; it sends the Bria call id and, for a
   transfer, the extension number.
 - `debug_dump` files (including the company detail answers `last_lookup_company_<id>.json`) contain real customer data: keep it `false` except while diagnosing, and delete the dumps afterwards.
 - `bria_probe.txt` contains phone numbers and SIP data: redact before sharing.
@@ -743,10 +759,14 @@ and one-click transfer through the Bria Desktop API, extension list.
 
 **Road to 1.0**
 
-- **0.9.0-rc** (release candidate) = the fixes from the live test of 0.8.0-beta on both PCs: Bria hold / transfer
-  against the real Bria (incl. the permission prompt and the Bria version), card animations on the office PCs (CPU,
-  readability), history over a few days of real calls, the error codes in practice. No new features.
-- **1.0.0** = 0.9.0-rc after a week without new issues; the extension list and history format are then frozen.
+- **0.9.0-rc** (release candidate) in four parts: **rc.1** answer / decline / hang up from the card, transfer shown
+  only where Bria offers it, live-test fixes, ownership (done); **rc.2** dynamic card placement (corner first, step
+  aside for Bria's toast / main window and other notifications); **rc.3** call history (narrow layout, day groups, date
+  filter, row actions) and the ⚙ settings dialog (safer extension editor, Névjegy); **rc.4** Chrome extension 0.9.0
+  (toolbar icon + status popup, version handshake `EXT-OLD`, store package). Transfer UI only once the provider
+  enables the command.
+- **1.0.0** = 0.9.0-rc after a week without new issues, with the new logo; the Chrome extension is published on the
+  Chrome Web Store then; the extension list and history format are frozen.
 
 Also open (any time before or after 1.0):
 
@@ -773,8 +793,9 @@ callcompanion/
   config.py  config.json  version.py  requirements.txt
   extension/            manifest.json  background.js  content.js
   assets/               app.ico
+  tools/                placement_probe.py  bria_transfer_probe.py  bria_capabilities_probe.py  (diagnostics, not shipped)
   build.ps1  callcompanion.spec  installer.iss
-  README.md  CHANGELOG.md  HANDOFF.md  .gitignore
+  README.md  CHANGELOG.md  .gitignore
 ```
 
 Runtime data lives in `%LOCALAPPDATA%\CallCompanion\` (`app.log`, `app.lock`, `history.db`, `settings.json`, optional personal `config.json`,

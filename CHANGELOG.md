@@ -3,6 +3,38 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [0.9.0-rc.1] - 2026-11-13
+
+Release candidate, part 1 of 4: call control from the card and the fixes from the live test of 0.8.0-beta.
+(rc.2 = dynamic card placement, rc.3 = call history and settings, rc.4 = Chrome extension 0.9.0.)
+
+### Added
+- **✓ Felvesz / ✕ Elutasít** on a ringing incoming card and **✕ Bontás** on a card we dial (Bria Desktop API
+  `GET /answer` and `GET /endCall`). **✕ Bontás** during a call too, next to Tartás. The buttons wait for Bria's log
+  to report the answer / the end, so the card changes exactly as it does when you use Bria's own buttons. A call
+  declined with **✕ Elutasít** is never shown as missed, whatever end reason Bria writes to its log (log line
+  `call <id> declined from the card (log reason <reason>)`; which reason Bria writes is checked in the live test).
+  *Unverified on a real call*: the capabilities probe only showed that this Bria knows both commands.
+- **Transfer only where it works**: the app asks Bria once whether it knows `transferCall` (sent for a call id that
+  does not exist, so nothing happens to real calls): 20 s after start, when a call rings (if not known yet or older
+  than 30 min) and in the developer check. **↪ Átkapcsolás is shown only when Bria knows the command**; on the
+  provider-provisioned Bria Enterprise 6.8.8.1 it does not, so the button stays hidden instead of failing with 400.
+  If the provider enables it, the button appears by itself (no update needed). New key `bria_api.transfer`:
+  `"auto"` (default) | `"on"` | `"off"`. Log line `bria api: capability transferCall -> 400 (not available)`.
+- `tools/`: the diagnostic probes `placement_probe.py`, `bria_transfer_probe.py` and `bria_capabilities_probe.py`
+  (run from the repo: `.venv\Scripts\python tools\<probe>.py`; not part of the exe / installer). The transfer probe no
+  longer has a provider-specific default domain / prefix.
+
+### Changed
+- A refused transfer says *A Bria elutasította az átkapcsolást (400)* (was a wrong hint about Bria 6.2) and Bria's
+  answer body is logged (digits masked) for every refused Bria request.
+- Developer tools > *Bria vezérlés ellenőrzése* also says whether transfer is available on this Bria.
+- Main window: the `BRIA-API` message reads *A kártya hívásgombjai nem működnek*.
+- The main window waits 60 s after start (was 25 s) before it reports `EXT-OFFLINE`, so the extension's retry has
+  time to deliver the session.
+- Ownership: Call Companion is Dékány Richárd's software. Exe file properties: company *Dékány Richárd*, copyright
+  *© 2026 Dékány Richárd*; installer `AppCopyright`; neutral examples in the README and in a config.py comment.
+
 ## [0.8.0-beta] - 2026-11-11
 
 Call-handling release, part 3 of the road to 1.0: hold and one-click transfer from the card, with a per-PC list of

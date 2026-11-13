@@ -77,6 +77,7 @@ class Controller(QObject):
     company_sig = Signal(str, str)      # call_id, company name (stage 2: arrives after the name)
     bria_sig = Signal(str, str, bool, str, object)   # v0.8.0: call_id, action, ok, message, extra
     bria_check_sig = Signal(bool, str)                # v0.8.0: developer window "Bria vezérlés ellenőrzése"
+    bria_caps_sig = Signal()                          # v0.9.0: the transfer capability check finished
 
     def __init__(self, cfg: dict, store: HistoryStore | None = None, settings: Settings | None = None):
         super().__init__()
@@ -108,6 +109,7 @@ class Controller(QObject):
         self.ext_sig.connect(self.on_ext)
         self.company_sig.connect(self.on_company)
         self.bria_sig.connect(self.on_bria_result)
+        self.bria_caps_sig.connect(self._apply_call_controls)
         if settings is not None:
             settings.changed.connect(self._extensions_changed)
 
@@ -135,6 +137,8 @@ class Controller(QObject):
         self.client.start_warmup()            # keeps one MiniCRM connection warm (no-op without a session)
         self.health_timer.start()
         QTimer.singleShot(1_500, self.refresh_health)
+        if self.bria_api.enabled:
+            QTimer.singleShot(20_000, self._maybe_check_transfer)   # v0.9.0: is ↪ Átkapcsolás possible here?
 
     def stop(self):
         self.health_timer.stop()
@@ -294,9 +298,11 @@ class Controller(QObject):
         ov = CallOverlay(**self._ui_kwargs())
         ov.closed.connect(lambda ov=ov: self._on_overlay_closed(ov))
         cid = self.current_id
-        if cid:                  # a call card (not a notice): hold / transfer through the Bria Desktop API
+        if cid:                  # a call card (not a notice): call control through the Bria Desktop API
             exts = self.settings.extensions if self.settings is not None else []
-            ov.set_call_controls(self.bria_api.enabled, exts)
+            ov.set_call_controls(self.bria_api.enabled, exts, bool(self.bria_api.transfer_known()))
+            ov.answer_requested.connect(lambda cid=cid, ov=ov: self._bria_action(cid, ov, "answer", None))
+            ov.end_requested.connect(lambda kind, cid=cid, ov=ov: self._bria_action(cid, ov, "end", kind))
             ov.hold_requested.connect(lambda hold, cid=cid, ov=ov: self._bria_action(cid, ov, "hold", hold))
             ov.transfer_requested.connect(
                 lambda number, name, cid=cid, ov=ov: self._bria_action(cid, ov, "transfer", (number, name)))
@@ -387,6 +393,11 @@ class Controller(QObject):
         elif ev.kind == "ended":
             meta = self._calls.pop(ev.call_id, None) or {"dir": ev.direction}
             outcome = self._outcome(meta, ev)
+            if meta.get("user_end") == "reject" and outcome == "missed":
+                # declined with ✕ Elutasít: whatever end reason Bria logged, it is not a missed call (unverified
+                # which reason Bria writes for an API decline; this line shows it in the live test)
+                log.info("call %s declined from the card (log reason %s)", ev.call_id, ev.reason)
+                outcome = "rejected"
             talk = int(time.monotonic() - meta["answered_at"]) if meta.get("answered_at") else 0
             self.status.call_ended(ev.call_id, outcome=outcome, duration_s=talk)
         if ev.kind == "ringing":
@@ -399,6 +410,7 @@ class Controller(QObject):
             self._new_overlay().show_ringing(ev.number, ev.direction)    # immediate: number only
             fut = self.pool.submit(self._safe_lookup, ev.number)
             fut.add_done_callback(lambda f, cid=ev.call_id: self.lookup_sig.emit(cid, f.result()))
+            self._maybe_check_transfer()
         elif ev.call_id == self.current_id:
             ov = self._live_overlay()
             if ev.kind == "answered":
@@ -454,17 +466,49 @@ class Controller(QObject):
 
     # ---- v0.8.0: hold / transfer through the Bria Desktop API ------------------------------------------------
     def _extensions_changed(self):
+        self._apply_call_controls()
+
+    def _apply_call_controls(self):
         ov = self._live_overlay()
         if ov is not None and self.current_id:
-            ov.set_call_controls(self.bria_api.enabled, self.settings.extensions)
+            exts = self.settings.extensions if self.settings is not None else []
+            ov.set_call_controls(self.bria_api.enabled, exts, bool(self.bria_api.transfer_known()))
 
-    def _bria_action(self, call_id: str, ov, action: str, arg):
-        number = ov.number if isValid(ov) else ""
-        log.info("bria action %s for call %s", action, call_id)
+    def _maybe_check_transfer(self):
+        """v0.9.0: does this Bria offer transferCall? Checked in the background at start, when a call rings
+        (if unknown or older than 30 min) and by the developer check; the card shows ↪ Átkapcsolás only if yes."""
+        if not self.bria_api.transfer_check_due():
+            return
 
         def job():
             try:
-                if action == "hold":
+                self.bria_api.check_transfer()
+            except BriaApiError as e:
+                log.info("bria api: transfer capability not checked: %s", e.code)
+            except Exception:
+                log.exception("transfer capability check crashed")
+            self.bria_caps_sig.emit()
+        try:
+            self.pool.submit(job)
+        except RuntimeError:
+            pass
+
+    def _bria_action(self, call_id: str, ov, action: str, arg):
+        number = ov.number if isValid(ov) else ""
+        log.info("bria action %s%s for call %s", action, f" ({arg})" if action == "end" else "", call_id)
+        meta = self._calls.get(call_id)
+        if action == "end" and meta is not None:
+            meta["user_end"] = arg          # set before the request: Bria's log line may arrive before its answer
+
+        def job():
+            try:
+                if action == "answer":
+                    self.bria_api.answer(number)
+                    self.bria_sig.emit(call_id, "answer", True, "", None)
+                elif action == "end":
+                    self.bria_api.end_call(number)
+                    self.bria_sig.emit(call_id, "end", True, "", arg)
+                elif action == "hold":
                     held = self.bria_api.set_hold(number, bool(arg))
                     self.bria_sig.emit(call_id, "hold", True, "", held)
                 else:
@@ -494,9 +538,13 @@ class Controller(QObject):
             self.status.set_bria_api(Health.WARN, f"{extra}: {message} ({now})")
         ov = self._overlay_for(call_id)
         if not ok:
+            meta = self._calls.get(call_id)
+            if action == "end" and meta is not None:
+                meta.pop("user_end", None)
             if ov:
                 ov.control_failed(message)
             return
+        # answer / end: the card changes when Bria's log reports the answer / the end (on_event)
         if action == "hold":
             self.status.call_hold(call_id, bool(extra))
             if ov:
@@ -515,6 +563,7 @@ class Controller(QObject):
             try:
                 text = self.bria_api.check()
                 self.bria_check_sig.emit(True, text)
+                self.bria_caps_sig.emit()
             except BriaApiError as e:
                 self.bria_check_sig.emit(False, f"{e.code}: {e.user_text} ({e.detail})")
             except Exception as e:

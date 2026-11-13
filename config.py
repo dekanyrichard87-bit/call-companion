@@ -55,7 +55,7 @@ DEFAULTS = {
             "log_path": "",
             "log_globs": [
                 # live log: ...\Bria Enterprise\<version>\<profile>\Logs\Log.txt, e.g.
-                # ...\6.0\default_user\Logs\Log.txt and ...\6.0\104@dekorosmuvekbundle.hu\Logs\Log.txt.
+                # ...\6.0\default_user\Logs\Log.txt and ...\6.0\104@cegnev.hu\Logs\Log.txt.
                 # The detector tails whichever of them was written to most recently.
                 "%APPDATA%\\CounterPath Corporation\\Bria Enterprise\\*\\*\\Logs\\Log.txt",
             ],
@@ -87,16 +87,17 @@ DEFAULTS = {
         "retention_days": 90,           # older calls are deleted at start
         "max_rows": 2000,               # at most this many calls are kept
     },
-    # v0.8.0: hold / transfer from the call card through the Bria Desktop API (bria_api.py). Bria asks once for
-    # permission ("Allow access always"). Transfer needs Bria 6.2+.
+    # v0.8.0 / v0.9.0: call control from the card through the Bria Desktop API (bria_api.py): answer / decline /
+    # hang up, hold / resume, transfer. Bria asks once for permission ("Allow access always").
     "bria_api": {
-        "enabled": True,                # False = no Tartás / Átkapcsolás buttons on the card
+        "enabled": True,                # False = no call-control buttons on the card
         "host": "cpclientapi.softphone.com",
         "connect_host": "127.0.0.1",
         "port": 9002,
         "path": "/counterpath/socketapi/v1",
         "timeout_s": 3,
         "verify_tls": False,            # local connection only; Bria's embedded certificate may be expired
+        "transfer": "auto",             # v0.9.0: auto = show ↪ Átkapcsolás only if this Bria offers it | on | off
     },
     # Auto-update from GitHub Releases (updater.py). Only an installed copy (installer.iss) updates itself.
     "update": {
