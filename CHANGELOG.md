@@ -3,6 +3,28 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [1.0.0-rc.1] - 2026-11-16
+
+Release candidate for 1.0.0: the new logo, Chrome extension 1.0.0 for the Chrome Web Store, clean-up. 0.10.0-beta.3
+was verified live. **Reload the extension once after this update** (`chrome://extensions` > Call Companion > ↻); the
+main window reminds you with `EXT-OLD`.
+
+### Added
+- **New app logo** (designed by Dékány Richárd; `assets/logo.svg`): `assets/app.ico` rebuilt with every size drawn
+  from the SVG (16, 20, 24, 32, 40, 48, 64, 256 px - tray, exe, installer, *Settings > Apps*), extension icons
+  16 / 32 / 48 / 128 (the 128 px store icon with the 16 px store padding), logo on ⚙ Beállítások > Névjegy.
+- **Chrome Web Store material**: `store/listing.md` (Hungarian texts field by field, single purpose, permission
+  justifications, privacy answers, how to take the screenshot), `store/promo-440x280.png`, privacy policy
+  `docs/privacy.html` for GitHub Pages (Hungarian + English summary).
+
+### Changed
+- Chrome extension **1.0.0** (`version_name` 1.0.0-rc.1): new icons only, behaviour unchanged; the store package is
+  `dist\CallCompanion-extension-1.0.0.zip`.
+
+### Removed
+- Unused settings `minicrm.search_url`, `minicrm.parse.*`, `ui.answered_fade_ms` (left in a personal `config.json`
+  they are ignored) and the unused packages `beautifulsoup4` and `lxml` (smaller installer).
+
 ## [0.10.0-beta.3] - 2026-11-16
 
 UI/UX revision, part 3 of 3: the call shows inside the main window while it is the active window, and the history

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Call Companion – Adatvédelmi tájékoztató</title>
+<link rel="icon" href="logo.svg">
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; font: 16px/1.6 "Segoe UI", system-ui, sans-serif; background: #eff1f5; color: #4c4f69; }
+  main { max-width: 760px; margin: 0 auto; padding: 48px 24px 64px; }
+  header { display: flex; align-items: center; gap: 16px; margin-bottom: 32px; }
+  header img { width: 56px; height: 56px; }
+  h1 { font-size: 28px; margin: 0; color: #4c4f69; }
+  h2 { font-size: 19px; margin: 32px 0 8px; }
+  .muted { color: #6c6f85; font-size: 14px; }
+  ul { padding-left: 22px; }
+  code { background: #dce0e8; padding: 1px 6px; border-radius: 4px; font-size: 14px; }
+  section.en { margin-top: 48px; padding-top: 24px; border-top: 1px solid #ccd0da; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #1e1e2e; color: #cdd6f4; } h1 { color: #cdd6f4; } .muted { color: #a6adc8; }
+    code { background: #313244; } section.en { border-color: #45475a; }
+  }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <img src="logo.svg" alt="">
+  <div>
+    <h1>Call Companion – Adatvédelmi tájékoztató</h1>
+    <div class="muted">A „Call Companion – MiniCRM kapcsolat” Chrome-bővítményhez · Hatályos: 2026. november 16.</div>
+  </div>
+</header>
+
+<h2>Mit csinál a bővítmény?</h2>
+<p>A bővítmény egyetlen feladata, hogy a böngészőben már bejelentkezett MiniCRM-munkamenetet átadja a
+<strong>Call Companion</strong> programnak, amely <strong>ugyanazon a számítógépen</strong> fut. A program ezzel
+keresi ki a MiniCRM-ben, ki hív a Bria telefonon – külön jelszó vagy API-kulcs nélkül.</p>
+
+<h2>Milyen adatokhoz fér hozzá?</h2>
+<ul>
+  <li>A <code>r3.minicrm.hu</code> oldal munkamenet-sütijeihez (cookie-k), hogy a bejelentkezést átadhassa.</li>
+  <li>A bővítmény saját verziószámához és állapotához (mikor volt az utolsó sikeres átadás).</li>
+</ul>
+<p>A bővítmény <strong>nem olvassa</strong> a MiniCRM oldalak tartalmát, a böngészési előzményeket, és más
+weboldalakhoz nem fér hozzá. A MiniCRM-fülön futó kis szkript csak „felébreszti” a bővítményt, adatot nem olvas.</p>
+
+<h2>Hová kerülnek az adatok?</h2>
+<ul>
+  <li>Kizárólag a <code>127.0.0.1</code> címre (a saját gép), a Call Companion programnak. Az adat nem hagyja el a
+    számítógépet.</li>
+  <li>A bővítmény semmilyen külső szerverrel nem kommunikál, nincs benne analitika, reklám vagy követés.</li>
+  <li>Az adatokat nem adjuk el, nem adjuk tovább harmadik félnek, és nem használjuk más célra.</li>
+</ul>
+
+<h2>Mit tárol?</h2>
+<p>A bővítmény maga nem tárol személyes adatot. A Call Companion program a hívások előzményeit (szám, név, cég,
+időpont) a gépen, a felhasználó saját mappájában tárolja (legfeljebb 90 napig), és onnan nem küldi tovább.</p>
+
+<h2>Jogosultságok</h2>
+<ul>
+  <li><code>cookies</code> – a MiniCRM-munkamenet átadásához.</li>
+  <li><code>alarms</code> – félpercenként ellenőrzi, hogy fut-e a program (például újraindítás után).</li>
+  <li><code>https://r3.minicrm.hu/*</code> – csak a MiniCRM sütijeihez és a felébresztő szkripthez.</li>
+  <li><code>http://127.0.0.1/*</code> – a gépen futó Call Companion programmal való kapcsolathoz.</li>
+</ul>
+
+<h2>Kapcsolat</h2>
+<p>Készítette: Dékány Richárd. Kérdés esetén:
+<a href="https://github.com/dekanyrichard87-bit/call-companion/issues">GitHub – call-companion</a>.</p>
+
+<section class="en">
+<h2>Privacy policy (English summary)</h2>
+<p>The <em>Call Companion – MiniCRM kapcsolat</em> extension has a single purpose: it hands the user's existing
+MiniCRM session (cookies of <code>r3.minicrm.hu</code>) to the Call Companion desktop application running on the
+<strong>same computer</strong>, via <code>127.0.0.1</code> only. It does not read page content or browsing history,
+does not contact any remote server, contains no analytics, and does not sell, transfer or use the data for any other
+purpose. The desktop application keeps its call history locally on the user's PC. Contact: Dékány Richárd,
+<a href="https://github.com/dekanyrichard87-bit/call-companion/issues">GitHub issues</a>.</p>
+</section>
+</main>
+</body>
+</html>

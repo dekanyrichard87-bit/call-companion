@@ -316,7 +316,7 @@ class Controller(QObject):
     # ---- overlay -----------------------------------------------------------------------
     def _ui_kwargs(self):
         ui = self.cfg["ui"]
-        return {"margin": ui["margin_px"], "answered_fade_ms": ui["answered_fade_ms"],
+        return {"margin": ui["margin_px"],
                 "close_missed_on_action": bool(ui.get("missed_close_on_action", True)),
                 "end_linger_ms": int(ui.get("end_linger_ms", 3000))}
 

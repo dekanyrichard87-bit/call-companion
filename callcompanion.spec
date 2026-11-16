@@ -50,7 +50,7 @@ a = Analysis(
     pathex=[ROOT],
     # Everything under assets\ (icons, future overlay templates) -> _internal\assets, found via config.resource_path().
     datas=[(os.path.join(ROOT, "assets"), "assets")],
-    hiddenimports=["lxml.etree", "lxml._elementpath", "updater"],
+    hiddenimports=["updater"],
     excludes=EXCLUDES,
     noarchive=False,
 )

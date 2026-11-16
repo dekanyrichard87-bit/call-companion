@@ -22,20 +22,8 @@ DEFAULTS = {
         "cookie_domain": "minicrm.hu",
         "browsers": ["chrome", "edge", "firefox"],
         "cookie_header": "",
-        "search_url": "https://r3.minicrm.hu/System/Search?Query={term}",
         # {tail9} = last 9 digits, {local} = 06..., {e164} = +36..., {digits}
         "search_variants": ["{tail9}"],
-        "parse": {
-            # 1) page <title> like "Kovács István - MiniCRM" (generic titles are ignored)
-            "title_regex": "^(.*?)\\s+[-–|]\\s+MiniCRM\\s*$",
-            "title_generic": ["", "minicrm", "keresés", "search", "bejelentkezés",
-                              "login", "főoldal", "dashboard"],
-            # 2) fallback: result rows in the page (adjust after looking at last_lookup.html)
-            "row": "table tr",
-            "name": "a",
-            "company": ".customer-company, .company-name",
-            "link": "a[href]",
-        },
         # Saves the last real response to %LOCALAPPDATA%\CallCompanion\last_lookup.html (contains
         # customer data - for tuning the selectors; turn off when done).
         "debug_dump": True,
@@ -71,7 +59,6 @@ DEFAULTS = {
         },
     },
     "ui": {
-        "answered_fade_ms": 2500,
         "margin_px": 16,
         "end_linger_ms": 3000,                # v0.7.0: the ended card stays this long with the outcome, then fades
         # v0.9.0: where the call cards go (read by overlay.py)

@@ -1,6 +1,6 @@
 # Call Companion
 
-**Version 0.10.0-beta.3** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
+**Version 1.0.0-rc.1** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
 
 Call Companion is a small tray application that watches the **Bria Enterprise** softphone and, the moment a
 call rings, shows a frameless pop-up card (dark or light, see [Themes](#themes)) in the bottom-right corner of the screen (it steps left of Bria's own
@@ -169,7 +169,7 @@ simulator, live `app.log` view and "clear history"; the tray menu gets test call
 | `BRIA-LOG` | A Bria hívásai most nem láthatók | Is Bria running (Log Level Verbose)? Restart Call Companion |
 | `MINICRM-LOGIN` | Jelentkezzen be a MiniCRM-be | Log in to MiniCRM in Chrome; calls still pop up, without names |
 | `EXT-OFFLINE` | Nincs kapcsolat a Chrome-mal | Open Chrome with MiniCRM; check that the extension is on |
-| `EXT-OLD` | Frissítse a Chrome bővítményt | The app shipped a newer extension: `chrome://extensions` > Call Companion > ↻ (0.9.0) |
+| `EXT-OLD` | Frissítse a Chrome bővítményt | The app shipped a newer extension: `chrome://extensions` > Call Companion > ↻ (1.0.0) |
 | `MINICRM-NET` | A MiniCRM most nem érhető el | Internet connection |
 | `API-PORT` | A program egy része nem tudott elindulni | Port 48653 is taken: restart the PC |
 | `BRIA-API` | A kártya hívásgombjai nem működnek | Allow the app in Bria's API prompt; Bria running? |
@@ -194,7 +194,7 @@ simulator, live `app.log` view and "clear history"; the tray menu gets test call
 | `call_panel.py` | `CallPanel`: the call inside the active main window (mirrors the hidden card, presses its buttons) |
 | `theme.py` | Dark / light palettes, *Rendszer szerint* (Windows app theme), live switching, all style sheets, title bar colour |
 | `extensions_dialog.py` | `ExtensionsEditor`: the colleagues' extensions used by **↪ Átkapcsolás** (read-only list, edit form, inline delete confirmation) |
-| `extension/` | Chrome MV3 extension 0.9.0: `background.js` relays the MiniCRM session cookies and checks every 30 s whether the app restarted, `content.js` pokes the worker so the sync is fast, `popup.html` / `popup.js` = the toolbar popup, `icons/` |
+| `extension/` | Chrome MV3 extension 1.0.0 (new icons; 0.9.0 behaviour): `background.js` relays the MiniCRM session cookies and checks every 30 s whether the app restarted, `content.js` pokes the worker so the sync is fast, `popup.html` / `popup.js` = the toolbar popup, `icons/` |
 | `probe.py` | `--probe-bria`: captures what Bria writes during a test call (for adapting the parser) |
 | `updater.py` | Auto-update: checks GitHub Releases, downloads and verifies the installer, runs it silently when no call is active |
 | `config.py` / `config.json` | Defaults, the shipped config and optional per-user overrides (deep-merged) |
@@ -393,9 +393,8 @@ Carried over from earlier releases:
 | History keeps up to 90 days / 2000 calls | `history.retention_days`, `history.max_rows` | Developer tools > *Híváselőzmények törlése…* clears it |
 | No automated tests in the repository | The behaviour was verified with throw-away scripts (a fake MiniCRM server, a stand-in for Qt) and live calls | Planned |
 
-Unused configuration keys `minicrm.search_url` and `minicrm.parse.*` are leftovers from an earlier HTML-parsing
-approach and are ignored; `beautifulsoup4` and `lxml` are likewise no longer used by the lookup. They are still
-present in this release and will be removed in a later one.
+Since 1.0.0-rc.1 the old keys `minicrm.search_url`, `minicrm.parse.*` and `ui.answered_fade_ms` and the packages
+`beautifulsoup4` / `lxml` are gone; a personal `config.json` that still has them keeps working (they are ignored).
 
 ---
 
@@ -477,22 +476,29 @@ notes from the matching `CHANGELOG.md` section.
 
 Do not delete or re-tag a published release that PCs have already installed; publish a higher version instead.
 
-### Preview and live test of 0.10.0-beta.3 (call panel, days in the history)
+### Preview and live test of 1.0.0-rc.1 (new logo, extension 1.0.0)
 
-Before publishing, from the repository (no Bria needed), in both themes:
+Before publishing: `.venv\Scripts\python status_window.py` - the window icon and ⚙ > Névjegy show the new logo
+(both themes).
 
-1. `.venv\Scripts\python main.py --show --simulate +36301234567`: the main window is open and active, the call rings
-   in the panel, then is answered (counter). Click another window during the call: the card appears at once.
-2. Developer tools > simulator, *Nem fogadott*, with the main window active: burgundy panel that stays; click
-   elsewhere: it becomes a missed-call card. ⚙ > Megjelenés: switch off -> always the card.
-3. `.venv\Scripts\python status_window.py`: *Tegnap* / *Tegnapelőtt* / dates under the times, narrow window too.
+After `.\build.ps1 -Publish` (release `v1.0.0-rc.1`):
 
-After `.\build.ps1 -Publish` (release `v0.10.0-beta.3`):
+1. Tray icon, exe, installer and *Settings > Apps* show the new logo, crisp at 150 %.
+2. The main window says **EXT-OLD**: `chrome://extensions` > Call Companion > ↻ once (on both PCs); the toolbar icon is
+   the new logo, `app.log` shows `extension version 1.0.0`.
+3. The colleague's PC updates by itself.
+4. GitHub Pages on (repository *Settings > Pages*), `https://dekanyrichard87-bit.github.io/call-companion/privacy.html`
+   opens; then the store upload (`store/listing.md`).
 
-1. Main window in front, a real incoming call: the panel rings; Felvesz, Tartás, Bontás work.
-2. While it rings, click Bria or another program: the card appears at once (`panel: window deactivated -> card`).
-3. A missed call in the panel, then Visszahívás from it: the outgoing call shows in the panel too.
-4. Switch off on the Megjelenés page: always the card.
+### Chrome Web Store (1.0.0-rc.1 preparation)
+
+Everything the store asks for is in the repository: `store/listing.md` (texts field by field, permission
+justifications, privacy answers), `store/promo-440x280.png`, `extension/icons/icon128.png`, the privacy policy
+`docs/privacy.html` (served by GitHub Pages: repository *Settings > Pages > Deploy from a branch > main / docs*,
+address `https://dekanyrichard87-bit.github.io/call-companion/privacy.html`) and the package
+`dist\CallCompanion-extension-1.0.0.zip` written by `build.ps1`. Upload it as **Unlisted** in the Developer Dashboard;
+the review can take days. Once it is published, 1.0.0 pins the store id (`local_api.extension_id`) and the two PCs
+switch from the unpacked extension to the store one.
 
 ---
 
@@ -503,8 +509,7 @@ After `.\build.ps1 -Publish` (release `v0.10.0-beta.3`):
 - Windows 10 or 11, Python 3.11+ (for running from source)
 - Bria Enterprise 6.x
 - Google Chrome with the MiniCRM account logged in
-- Packages: `PySide6`, `requests`, `beautifulsoup4`, `lxml` (see `requirements.txt`; `beautifulsoup4`/`lxml` are
-  no longer used by the lookup and will be dropped)
+- Packages: `PySide6`, `requests` (see `requirements.txt`)
 
 ### 1. Run from source
 
@@ -565,7 +570,7 @@ one call in Bria, that one). `"bria_api": {"enabled": false}` hides the buttons.
 ### 3. Chrome extension (pairing)
 
 1. Open `chrome://extensions`, switch on **Developer mode**, click **Load unpacked**, choose the `extension` folder.
-   After an app update that changed the extension (0.4.0, 0.9.0), click the reload icon (↻) on the extension card
+   After an app update that changed the extension (0.4.0, 0.9.0, 1.0.0), click the reload icon (↻) on the extension card
    once: the main window says so with `EXT-OLD`. Pin the extension (puzzle icon > 📌) to see its status icon.
 2. Log in to MiniCRM in **that Chrome profile**.
 3. With the app running, `app.log` shows `extension push (...): N cookies` and the tray tooltip changes to
@@ -676,7 +681,6 @@ set), `log_globs` (see above), `log_globs_fallback` (see above), `incoming_regex
 | `bria_process_regex` | `"(?i)bria"` | Program file name of Bria: its main window is avoided when it overlaps the cards (not when maximised) |
 | `overlay_position` | `"bottom_right"` | `fixed` only: corner of the usable screen area (`bottom_right`, `bottom_left`, `top_right`, `top_left`) |
 | `offset_x` / `offset_y` | `-380` / `0` | `fixed` only: pixels added to the position; negative = left / up |
-| `answered_fade_ms` | `2500` | **No longer used** since 0.4.0 (an answered call keeps its card until the call ends); kept so existing `config.json` files stay valid |
 | `missed_persistent` | `true` (read by `main.py`, not in `config.py`) | `false` = missed calls fade out like before |
 | `missed_max` | `4` (read by `main.py`, not in `config.py`) | Missed-call cards kept at once; the oldest is closed beyond that |
 | `missed_close_on_action` | `true` (read by `main.py`, not in `config.py`) | `true` = opening the contact or the Google search closes a missed-call card (after a short confirmation); `false` = only **✕** closes it |
@@ -843,9 +847,12 @@ and one-click transfer through the Bria Desktop API, extension list.
   enables the command.
 - **0.10.0-beta** (UI/UX revision, design approved 2026-11-13): **beta.1** theme system with dark / light /
   system mode (done, verified live); **beta.2** drawn icons, history row buttons, *Visszahívás* (done, verified live); **beta.3** call panel inside
-  the active main window, days in the history rows (this release). Then **1.0.0-rc**.
-- **1.0.0** = 1.0.0-rc after a week without new issues, with the new logo; the Chrome extension is published on the
-  Chrome Web Store then; the extension list and history format are frozen.
+  the active main window, days in the history rows (done, verified live).
+- **1.0.0-rc.1** (this release): the new app logo everywhere (app, tray, installer, extension, Névjegy), Chrome
+  extension 1.0.0 and its Chrome Web Store material (`store/`, privacy page `docs/privacy.html`), clean-up of unused
+  settings and packages.
+- **1.0.0** = 1.0.0-rc after a week without new issues; the Chrome extension comes from the Chrome Web Store then;
+  the extension list and history format are frozen.
 
 Also open (any time before or after 1.0):
 
@@ -854,8 +861,7 @@ Also open (any time before or after 1.0):
 2. **Lookup timing breakdown** in the log (connect / server / parse), if the live test shows the lookup is still slow.
 3. **Installer and auto-update** (built in 0.5.0-beta): first real build, install and update cycle on the colleague's
    PC; then code-signing.
-4. **Clean-up**: remove the legacy `minicrm.search_url` / `minicrm.parse.*` keys and the unused `beautifulsoup4` / `lxml`
-   packages.
+4. **Clean-up**: done in 1.0.0-rc.1.
 
 Candidates after that: keeping the last session
 encrypted per user so the first call after boot already works, an automated test suite, handling several simultaneous
@@ -886,9 +892,9 @@ Runtime data lives in `%LOCALAPPDATA%\CallCompanion\` (`app.log`, `app.lock`, `h
 
 [Semantic Versioning](https://semver.org) with a pre-release label. `0.x` means beta: features and configuration may
 still change. `1.0.0` follows the release candidate `0.9.0-rc` (see [Roadmap](#roadmap)). The Chrome extension carries
-the same number in `extension/manifest.json` (`version` `0.9.0`, `version_name` `0.9.0-rc.4`; Chrome does not accept a
-pre-release label in `version`). It changes only when the extension changes (0.4.0-beta: start-up sync; 0.9.0-rc.4:
-restart check, toolbar popup, version handshake).
+the same number in `extension/manifest.json` (`version` `1.0.0`, `version_name` `1.0.0-rc.1`; Chrome does not accept
+a pre-release label in `version`). It changes only when the extension changes (0.4.0-beta: start-up sync; 0.9.0-rc.4:
+restart check, toolbar popup, version handshake; 1.0.0-rc.1: new logo, Chrome Web Store package).
 
 To cut a release: update `version.py`, `CHANGELOG.md` (and `extension/manifest.json` if the extension changed), commit,
 push, then `.\build.ps1 -Publish`. It creates the tag `v<version>` on the current commit together with the GitHub

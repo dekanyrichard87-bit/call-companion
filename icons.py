@@ -165,3 +165,24 @@ def size(px: int = 15) -> QSize:
 
 def available() -> bool:
     return _SVG_OK
+
+
+def logo_pixmap(px: int) -> QPixmap:
+    """v1.0.0: the app logo (assets/logo.svg, the user's design) for the Névjegy page; falls back to app.ico."""
+    import config
+    scr = QGuiApplication.primaryScreen()
+    dpr = scr.devicePixelRatio() if scr is not None else 1.0
+    path = config.resource_path("assets/logo.svg")
+    if _SVG_OK and path.exists():
+        r = QSvgRenderer(str(path))
+        if r.isValid():
+            pm = QPixmap(max(1, round(px * dpr)), max(1, round(px * dpr)))
+            pm.fill(Qt.GlobalColor.transparent)
+            pm.setDevicePixelRatio(dpr)
+            p = QPainter(pm)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            r.render(p, QRectF(0, 0, px, px))
+            p.end()
+            return pm
+    log.info("icons: logo.svg not usable, app.ico is shown")
+    return QIcon(str(config.resource_path("assets/app.ico"))).pixmap(px, px)

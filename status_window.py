@@ -1170,6 +1170,8 @@ def _demo() -> int:
     from settings import Settings
     st = Settings(os.path.join(tempfile.mkdtemp(), "settings.json"))     # one per preview run: the theme choice stays
     theme.init(app, st.theme)
+    import config
+    app.setWindowIcon(QIcon(str(config.resource_path("assets/app.ico"))))     # preview: the real app icon
     model = StatusModel()
     model.started -= 60
     for s in ("set_minicrm", "set_bria", "set_extension", "set_api"):
