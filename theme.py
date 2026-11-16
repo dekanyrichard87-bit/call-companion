@@ -79,7 +79,9 @@ class Palette:
     tip_bg: str         # tooltips (inverse of the window)
     tip_text: str
     # rgba tuples for painters / the card
-    hover_rgba: tuple   # soft disc under a hovered row action
+    hover_rgba: tuple   # stronger background under the hovered row action
+    soft_rgba: tuple    # v0.10.0-beta.2: soft background of all row actions while the row is hovered
+    green_hover: str    # filled green "Visszahívás" button, hovered
     card_bg: tuple
     card_missed_bg: tuple
     card_edge: tuple    # neutral card border (ended / no state)
@@ -100,7 +102,8 @@ DARK = Palette(
     missed_text="#e0607e", missed_status="#f5a3b5", missed_cross="#f5c2cf", on_accent="#1e1e2e",
     row="#313244", row_hover="#3a3b4f", row_sel="#45475a", row_missed="#33232d", row_missed_hover="#3a2733",
     done_bg="#2f4a3a", danger_bg="#5a2a38", danger_hover="#6e3344", tip_bg="#cdd6f4", tip_text="#1e1e2e",
-    hover_rgba=(255, 255, 255, 34), card_bg=(30, 30, 46, 238), card_missed_bg=(52, 24, 34, 242),
+    hover_rgba=(255, 255, 255, 36), soft_rgba=(255, 255, 255, 20), green_hover="#bfeeba",
+    card_bg=(30, 30, 46, 238), card_missed_bg=(52, 24, 34, 242),
     card_edge=(255, 255, 255, 30), card_btn=20, card_btn_hover=42,
 )
 
@@ -114,7 +117,8 @@ LIGHT = Palette(
     missed_text="#b4294a", missed_status="#b4294a", missed_cross="#ffffff", on_accent="#ffffff",
     row="#ffffff", row_hover="#f4f5f9", row_sel="#e6e9ef", row_missed="#fcf0f3", row_missed_hover="#f8e6eb",
     done_bg="#dde9dc", danger_bg="#f9dde3", danger_hover="#f3c9d2", tip_bg="#4c4f69", tip_text="#eff1f5",
-    hover_rgba=(76, 79, 105, 36), card_bg=(255, 255, 255, 248), card_missed_bg=(253, 240, 243, 250),
+    hover_rgba=(76, 79, 105, 36), soft_rgba=(76, 79, 105, 18), green_hover="#3a8f2a",
+    card_bg=(255, 255, 255, 248), card_missed_bg=(253, 240, 243, 250),
     card_edge=(76, 79, 105, 41), card_btn=18, card_btn_hover=36,
 )
 
@@ -323,7 +327,7 @@ QPushButton:disabled {{ color: {p.overlay}; background: {p.surface if not p.ligh
 QPushButton#seg {{ background: transparent; color: {p.subtext}; padding: 5px 12px; border-radius: 13px; }}
 QPushButton#seg:hover {{ background: {p.surface if not p.light else p.mantle}; color: {p.text}; }}
 QPushButton#seg:checked {{ background: {p.surface2}; color: {p.text}; font-weight: 600; }}
-QPushButton#gear {{ background: transparent; color: {p.subtext}; font-size: 18px; padding: 2px 8px; border-radius: 8px; }}
+QPushButton#gear {{ background: transparent; color: {p.subtext}; padding: 6px; border-radius: 8px; }}
 QPushButton#gear:hover {{ background: {p.surface2}; color: {p.text}; }}
 QPushButton#done {{ background: {p.done_bg}; color: {p.green}; }}
 QPushButton#primary {{ background: {p.blue}; color: {p.on_accent}; font-weight: 600; }}
@@ -404,6 +408,9 @@ QPushButton#reject:hover {{ background:{_rgba(p.red, 90 if not light else 52)}; 
 QPushButton#ext {{ background:{_rgba(p.mauve, 26 if not light else 20)}; text-align:left; padding:6px 9px;
                   font-size:12px; }}
 QPushButton#ext:hover {{ background:{_rgba(p.mauve, 70 if not light else 46)}; }}
+QPushButton#callback {{ background:{p.green}; color:{p.on_accent}; font-weight:600; min-height:18px; }}
+QPushButton#callback:hover {{ background:{p.green_hover}; }}
+QPushButton#callback:disabled {{ background:{_rgba(p.green, 70)}; color:{p.on_accent}; }}
 #hint {{ font-size:11px; color:{p.red}; }}
 #empty {{ font-size:11px; color:{p.dim}; }}
 QPushButton#busy {{ color:{p.dim}; }}

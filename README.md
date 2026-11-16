@@ -1,6 +1,6 @@
 # Call Companion
 
-**Version 0.10.0-beta.1** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
+**Version 0.10.0-beta.2** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
 
 Call Companion is a small tray application that watches the **Bria Enterprise** softphone and, the moment a
 call rings, shows a frameless pop-up card (dark or light, see [Themes](#themes)) in the bottom-right corner of the screen (it steps left of Bria's own
@@ -88,10 +88,17 @@ an entry in *Settings > Apps* for uninstalling, and **automatic updates** from t
  Neupert Márk                  line 1  name: large, bold
  Minta Kft.                    line 2  company: medium (hidden when MiniCRM has none)
  +36 30 525 6058               line 3  phone number: small, muted
- [ ✓ Felvesz ] [ ✕ Elutasít ]                     only while ringing (a call you dial: [ ✕ Bontás ])
- [ ⏸ Tartás ] [ ↪ Átkapcsolás ] [ ✕ Bontás ]       only during a call; ↪ only if this Bria offers transfer
-   [ Kovács Péter · 102 ] [ Nagy Éva · 103 ]   after ↪ Átkapcsolás: one click transfers
- [ 🔍 MiniCRM ] [ 🌐 Google ] [ 📋 Másolás ]
+ [ Felvesz ] [ Elutasít ]                         only while ringing (a call you dial: [ Bontás ])
+ [ Tartás ] [ Átkapcsolás ] [ Bontás ]             only during a call; Átkapcsolás only if this Bria offers transfer
+   [ Kovács Péter · 102 ] [ Nagy Éva · 103 ]   after Átkapcsolás: one click transfers
+ [          Visszahívás          ]               only on a missed-call card (green, 0.10.0-beta.2)
+ [ M MiniCRM ] [ G Google ] [ Másolás ]
+```
+
+Every button has a drawn icon (phone, hang-up, pause / play, transfer, "M" for MiniCRM, "G" for Google, copy,
+✓ when copied; `icons.py`, the shapes of the design canvas, crisp at any DPI and in both themes).
+
+```
 ```
 
 **Visual states.** Ringing / dialling: a soft glow pulses around the card (green incoming, mauve outgoing) and the
@@ -115,10 +122,19 @@ time and a transfer note. The main window shows it **grouped by day** under head
 fogadott*, *Tegnap*, *Hétfő, november 10.*, *2026. október 28., kedd* (one click folds / unfolds a day; *Ma* and
 *Tegnap* are open, older days folded; a search or filter opens every day with hits). Two filter rows: *Összes / Nem
 fogadott* and *Bármikor / Mai / Tegnap / A héten / Múlt héten* (weeks Monday-Sunday); the date filter and the search
-look at the whole stored history, not only the newest 300 calls. Every row has its own actions at the right end:
-**🔍** MiniCRM (only when the caller is in MiniCRM), **📋** copy the number (turns into a green ✓), **🌐** Google —
-faint at rest, bright when the mouse is over the row; one click, no selection needed (keyboard: Enter = MiniCRM,
-Ctrl+C = copy). The time and the actions keep their place however narrow the window is.
+look at the whole stored history, not only the newest 300 calls. Every row (0.10.0-beta.2) has the time and four
+32x32 buttons at its right end, vertically centred: **Visszahívás** (Bria dials the number; only for numbers with at
+least 6 digits and with Bria control on; disabled while a call rings or runs), **MiniCRM** (only when the caller is in
+MiniCRM, otherwise the slot stays empty), **Másolás** (turns into a green ✓) and **Google**. At rest they show at 72 %,
+over the row they get a soft background, the button under the mouse a stronger one and a tooltip (*Visszahívás: +36 …*).
+In a missed-call row the Visszahívás icon is always green. One click, no selection needed (keyboard: Enter =
+MiniCRM, Ctrl+C = copy). The row's direction arrow, the day headers' chevrons, the ⚙ and the search icon are drawn
+too. The time and the actions keep their place however narrow the window is.
+
+**Visszahívás** (call back) starts an outgoing call through the Bria Desktop API (`GET /call`); the number is sent in
+the national form (`+36301234567` -> `06301234567`, other countries `00...`) with the MiniCRM name as display name.
+The row shows a green ✓; on a missed-call card it confirms *VISSZAHÍVÁS INDÍTVA* and closes. The outgoing call then
+gets its normal card from Bria's log. The same number is not dialled twice within 3 s.
 
 ### Themes
 
@@ -163,6 +179,7 @@ simulator, live `app.log` view and "clear history"; the tray menu gets test call
 | `settings.py` | `Settings`: values changed inside the app (developer mode, theme, extension list) in `settings.json` |
 | `bria_api.py` | `BriaApi`: Bria Desktop API client (local secure WebSocket) for answer, decline / hang up, hold, resume and transfer (only offered when this Bria knows the command) |
 | `settings_dialog.py` | **Beállítások** (⚙): Mellékek, Megjelenés (theme tiles), Fejlesztői mód, Névjegy |
+| `icons.py` | Drawn icons (shapes of the design canvas, rendered with QtSvg; "M" / "G" marks), per theme |
 | `theme.py` | Dark / light palettes, *Rendszer szerint* (Windows app theme), live switching, all style sheets, title bar colour |
 | `extensions_dialog.py` | `ExtensionsEditor`: the colleagues' extensions used by **↪ Átkapcsolás** (read-only list, edit form, inline delete confirmation) |
 | `extension/` | Chrome MV3 extension 0.9.0: `background.js` relays the MiniCRM session cookies and checks every 30 s whether the app restarted, `content.js` pokes the worker so the sync is fast, `popup.html` / `popup.js` = the toolbar popup, `icons/` |
@@ -354,6 +371,9 @@ Carried over from earlier releases:
 | Hungarian-centric number handling | `+36`, `06`, `0036` and PBX-prefixed `000 36...` forms are normalised; other countries are searched as `+<digits>` | - |
 | "Glass" effect is translucent only | No acrylic blur yet | - |
 | **Live follow of Windows' theme is unverified** | *Rendszer szerint* relies on Qt reporting Windows' app-theme change (Qt 6.5+) | The theme is also re-read whenever a window of the app opens; check the `theme: system changed` log line |
+| **Visszahívás number form is unverified** | The +36 numbers of the history are dialled as `06...`; the provider's dial plan was only tested with a typed number | `bria api: call 06...` in `app.log`; if Bria refuses, tell the developer the code |
+| **Visszahívás is off during a call** | What Bria does with a second call while one is live is not tested | Hang up first, or dial in Bria |
+| **Drawn icons need QtSvg in the exe** | PyInstaller bundles it because it is imported; unverified until the first build of 0.10.0-beta.2 | Without it `app.log` says `icons: QtSvg not available` and text glyphs are shown |
 | Chrome extension popup is dark only | The extension did not change in 0.10.0-beta (a change needs a reload on every PC) | Planned with the Web Store extension (1.0.0) |
 | **Installer not yet run on a clean machine** | `build.ps1` / `installer.iss` / `updater.py` were written and their logic unit-tested, but the first real build and the first update cycle happen on the colleague's PC test | Follow [the test plan](#first-test-on-a-colleagues-pc) |
 | **Unsigned exe and installer** | No code-signing certificate. A setup downloaded with a browser gets a SmartScreen *Windows protected your PC* screen; antivirus may look harder at a new PyInstaller exe | *More info > Run anyway* once. Updates downloaded by the app itself carry no download mark, so they do not trigger SmartScreen. Code-signing is on the roadmap |
@@ -445,26 +465,24 @@ notes from the matching `CHANGELOG.md` section.
 
 Do not delete or re-tag a published release that PCs have already installed; publish a higher version instead.
 
-### Preview and live test of 0.10.0-beta.1 (themes)
+### Preview and live test of 0.10.0-beta.2 (icons, row buttons, Visszahívás)
 
-Before publishing, from the repository (no Bria needed):
+Before publishing, from the repository (no Bria needed), in both themes:
 
-1. `.venv\Scripts\python status_window.py` (main window with sample data) > **⚙** > **Megjelenés**: click
-   *Sötét*, *Világos*, *Rendszer szerint*; the main window and the settings switch at once. Check in light mode:
-   status card, filters, search box, rows (white, missed rows pink with the burgundy bar), company tag, day headers,
-   tooltips; *Mellékek* (list, form, delete confirmation) and the title bars.
-2. `.venv\Scripts\python main.py --simulate +36301234567`: the card in both themes (ringing green glow, in call
-   blue); switch the theme while the card is open (⚙ in the main window). Developer tools > simulator for the missed,
-   hold, notice and ended states.
+1. `.venv\Scripts\python status_window.py`: row buttons (Visszahívás · MiniCRM · Másolás · Google, time left of
+   them), tooltips, green Visszahívás in missed rows, empty MiniCRM slot without a profile, Másolás -> green ✓,
+   Visszahívás -> green ✓ (the preview dials nothing), narrow window (420 px), drawn arrows, chevrons, ⚙, search
+   icon; ⚙ > Mellékek (Szerkesztés, up / down icons).
+2. `.venv\Scripts\python main.py --simulate +36301234567` and the developer tools simulator (*Nem fogadott*):
+   card icons, green Visszahívás on the missed card.
 
-After `.\build.ps1 -Publish` (release `v0.10.0-beta.1`):
+After `.\build.ps1 -Publish` (release `v0.10.0-beta.2`):
 
-1. After the update (the default is *Rendszer szerint*) the app has the Windows app theme; `app.log`: `theme: start,
-   mode system -> dark|light`.
-2. A real incoming call in **Világos**: the card is readable, the buttons work.
-3. *Rendszer szerint*: switch Windows' app mode (Settings > Personalisation > Colours): the app follows
-   (`theme: system changed -> ...`); if not, it follows the next time a window of the app opens.
-4. Restart the app: the chosen theme stays. The colleague's PC updates by itself.
+1. Visszahívás from a missed row (e.g. your mobile): the call starts, the outgoing card appears, the row shows ✓;
+   `app.log`: `bria api: call 06...xxxx -> 200`.
+2. Visszahívás from a missed-call card: *VISSZAHÍVÁS INDÍTVA*, the card closes, the outgoing card appears.
+3. During a call the Visszahívás buttons are disabled (tooltip *Hívás közben nem indítható*).
+4. The icons show in the installed exe and are crisp at 150 % (no `icons: QtSvg not available` in `app.log`).
 
 ---
 
@@ -512,7 +530,7 @@ To try only the pop-up (no Bria, no MiniCRM) set `"mock": true` in `config.json`
 4. With the app running, `app.log` shows `Tailing Bria log: <path> (<encoding>)` and the Bria row in the developer tools
    reads "Log.txt figyelése".
 
-### 2b. Bria call control (hold and transfer)
+### 2b. Bria call control (hold, transfer, call back)
 
 The card's call buttons (**✓ Felvesz**, **✕ Elutasít**, **✕ Bontás**, **⏸ Tartás**, **↪ Átkapcsolás**) use the Bria
 Desktop API, a local secure WebSocket that Bria opens on
@@ -735,6 +753,8 @@ Everything is logged to `%LOCALAPPDATA%\CallCompanion\app.log` (cookies and resp
 | `history: pruned N old + M over-limit row(s)` | Old calls removed at start (`history` block) |
 | `bria action hold\|transfer for call ...` then `bria api: N call(s) in Bria, match for ...1234 -> <id>` | A card button was pressed; Bria listed its calls and the matching one was found |
 | `bria api: holdCall\|resumeCall <id> -> 200`, `bria api: transferCall <id> -> 102: 200` | Bria accepted the action |
+| `callback requested (row\|card) for call <id> ...4567`, `bria api: call 06...4567 -> 200` | Visszahívás pressed; Bria started the call (the form sent is shown: `06...` / `00...`) |
+| `callback failed: BRIA-API-...` / `callback ignored: the same number was dialled ...` | Bria refused or is not reachable (tooltip on the row / red line on the card) / a double click within 3 s |
 | `bria api: answerCall\|endCall <id> -> 200` | ✓ Felvesz / ✕ Elutasít / ✕ Bontás was accepted by Bria (the card changes when the log reports it) |
 | `call <id> declined from the card (log reason ...)` | A call declined with ✕ Elutasít; the reason shows what Bria logged (kept as *Elutasítva*, never as missed) |
 | `bria api: capability transferCall -> 400 (not available)` / `-> 200 (available)` | Result of the transfer check: ↪ Átkapcsolás hidden / shown |
@@ -811,7 +831,7 @@ and one-click transfer through the Bria Desktop API, extension list.
   popup, version handshake `EXT-OLD`, store package). Transfer UI only once the provider
   enables the command.
 - **0.10.0-beta** (UI/UX revision, design approved 2026-11-13): **beta.1** theme system with dark / light /
-  system mode (this release); **beta.2** drawn icons, history row buttons, *Visszahívás*; **beta.3** call panel inside
+  system mode (done, verified live); **beta.2** drawn icons, history row buttons, *Visszahívás* (this release); **beta.3** call panel inside
   the active main window. Then **1.0.0-rc**.
 - **1.0.0** = 1.0.0-rc after a week without new issues, with the new logo; the Chrome extension is published on the
   Chrome Web Store then; the extension list and history format are frozen.
@@ -837,7 +857,7 @@ calls, acrylic blur, Chrome Web Store (unlisted) publication of the extension.
 ```
 callcompanion/
   main.py  detectors.py  events.py  local_api.py  crm.py  overlay.py  status_window.py  dev_window.py
-  history.py  settings.py  settings_dialog.py  theme.py  bria_api.py  extensions_dialog.py  probe.py  updater.py
+  history.py  settings.py  settings_dialog.py  theme.py  icons.py  bria_api.py  extensions_dialog.py  probe.py  updater.py
   config.py  config.json  version.py  requirements.txt
   extension/            manifest.json  background.js  content.js
   assets/               app.ico

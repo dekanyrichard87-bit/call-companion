@@ -39,14 +39,15 @@ import time
 from ctypes import wintypes
 from urllib.parse import quote
 
-from PySide6.QtCore import (QAbstractAnimation, QEasingCurve, QPoint, QPointF, QPropertyAnimation, QRectF, QTimer, Qt,
-                            QUrl, Signal)
+from PySide6.QtCore import (QAbstractAnimation, QEasingCurve, QPoint, QPointF, QPropertyAnimation, QRectF, QSize, QTimer,
+                            Qt, QUrl, Signal)
 from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from shiboken6 import isValid   # ships with PySide6: False once the C++ side of a widget is deleted
 
 import config
+import icons
 import theme
 from crm import CallerInfo
 
@@ -410,6 +411,7 @@ def _restyle_cards():
     for w in list(_STACK):
         if isValid(w):
             w.setStyleSheet(theme.qss_card())
+            w._apply_icons()
             w.icon.update()
             w.update()
 
@@ -423,6 +425,7 @@ class CallOverlay(QWidget):
     transfer_requested = Signal(str, str)    # v0.8.0: extension number, colleague name
     answer_requested = Signal()              # v0.9.0: ✓ Felvesz on a ringing incoming card
     end_requested = Signal(str)              # v0.9.0: "reject" (ringing) | "hangup" (in call / dialling)
+    callback_requested = Signal()            # v0.10.0-beta.2: Visszahívás on a missed-call card
     WIDTH = 340                       # visible card width
     OUTER = WIDTH + 2 * GLOW          # window width (card + glow margin)
     LINGER_DEFAULT_MS = 3000
@@ -482,7 +485,7 @@ class CallOverlay(QWidget):
         self.lbl_timer.setObjectName("timer")
         self.lbl_timer.setVisible(False)
         head.addWidget(self.lbl_timer)
-        self.btn_close = QPushButton("✕")
+        self.btn_close = QPushButton("")
         self.btn_close.setObjectName("close")
         self.btn_close.setToolTip("Bezárás")
         self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -508,10 +511,10 @@ class CallOverlay(QWidget):
         rrow = QHBoxLayout(self.ring_controls)
         rrow.setContentsMargins(0, 8, 0, 0)
         rrow.setSpacing(8)
-        self.btn_answer = QPushButton("✓ Felvesz")
+        self.btn_answer = QPushButton("Felvesz")
         self.btn_answer.setObjectName("answer")
         self.btn_answer.setToolTip("A hívás fogadása")
-        self.btn_reject = QPushButton("✕ Elutasít")
+        self.btn_reject = QPushButton("Elutasít")
         self.btn_reject.setObjectName("reject")
         self.btn_reject.setToolTip("A hívás elutasítása")
         for b in (self.btn_answer, self.btn_reject):
@@ -528,14 +531,14 @@ class CallOverlay(QWidget):
         crow = QHBoxLayout(self.controls)
         crow.setContentsMargins(0, 8, 0, 0)
         crow.setSpacing(8)
-        self.btn_hold = QPushButton("⏸ Tartás")
+        self.btn_hold = QPushButton("Tartás")
         self.btn_hold.setObjectName("ctl")
         self.btn_hold.setToolTip("A hívás tartásba tétele (a hívó várakozik)")
-        self.btn_xfer = QPushButton("↪ Átkapcsolás")
+        self.btn_xfer = QPushButton("Átkapcsolás")
         self.btn_xfer.setObjectName("ctl")
         self.btn_xfer.setCheckable(True)
         self.btn_xfer.setToolTip("A hívás átkapcsolása egy kollégához")
-        self.btn_hangup = QPushButton("✕ Bontás")
+        self.btn_hangup = QPushButton("Bontás")
         self.btn_hangup.setObjectName("reject")
         self.btn_hangup.setToolTip("A hívás befejezése")
         for b in (self.btn_hold, self.btn_xfer, self.btn_hangup):
@@ -561,13 +564,27 @@ class CallOverlay(QWidget):
         self._hint_timer.setSingleShot(True)
         self._hint_timer.timeout.connect(lambda: (self.lbl_hint.setVisible(False), self._place()))
 
+        # v0.10.0-beta.2: missed-call card only: full-width green Visszahívás above MiniCRM / Google / Másolás
+        self.callback_row = QWidget()
+        cbl = QHBoxLayout(self.callback_row)
+        cbl.setContentsMargins(0, 8, 0, 0)
+        self.btn_callback = QPushButton("Visszahívás")
+        self.btn_callback.setObjectName("callback")
+        self.btn_callback.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_callback.setToolTip("A szám visszahívása a Briával")
+        self.btn_callback.clicked.connect(self._request_callback)
+        cbl.addWidget(self.btn_callback)
+        root.addWidget(self.callback_row)
+        self.callback_row.setVisible(False)
+        self._callback_allowed = False
+
         self.actions = QWidget()
         row = QHBoxLayout(self.actions)
         row.setContentsMargins(0, 8, 0, 0)
         row.setSpacing(8)
-        self.btn_crm = QPushButton("🔍 MiniCRM")
-        self.btn_google = QPushButton("🌐 Google")
-        self.btn_copy = QPushButton("📋 Másolás")
+        self.btn_crm = QPushButton("MiniCRM")
+        self.btn_google = QPushButton("Google")
+        self.btn_copy = QPushButton("Másolás")
         self.btn_crm.setToolTip("A hívó megnyitása a MiniCRM-ben")
         self.btn_google.setToolTip("A szám keresése a Google-ben")
         self.btn_copy.setToolTip("A telefonszám másolása a vágólapra")
@@ -578,6 +595,25 @@ class CallOverlay(QWidget):
         self.btn_google.clicked.connect(self._open_google)
         self.btn_copy.clicked.connect(self._copy)
         root.addWidget(self.actions)
+        self._apply_icons()
+
+    # ---- v0.10.0-beta.2: drawn icons -------------------------------------------------------------
+    ICONS = {"btn_close": ("close", "text"), "btn_answer": ("phone", "green"), "btn_reject": ("hangup", "red"),
+             "btn_hangup": ("hangup", "red"), "btn_xfer": ("transfer", "text"), "btn_crm": ("crm", "text"),
+             "btn_google": ("google", "text"), "btn_copy": ("copy", "text"), "btn_callback": ("phone", "on_accent")}
+
+    def _apply_icons(self):
+        """Card button icons in the current theme (again after a switch). Tartás / Folytatás and the copy ✓ depend
+        on the state, so they are set here too."""
+        for attr, (name, role) in self.ICONS.items():
+            b = getattr(self, attr)
+            if attr == "btn_copy" and b.objectName() == "done":
+                b.setIcon(icons.icon("check", "green"))
+            else:
+                b.setIcon(icons.icon(name, role, disabled=None if attr == "btn_callback" else "disabled"))
+            b.setIconSize(QSize(15, 15))
+        self.btn_hold.setIcon(icons.icon("play" if self._held else "pause", "text"))
+        self.btn_hold.setIconSize(QSize(15, 15))
 
     # ---- painting / placement -------------------------------------------------------------
     def paintEvent(self, _):
@@ -827,6 +863,7 @@ class CallOverlay(QWidget):
         times = f" ×{self._missed_count}" if self._missed_count > 1 else ""
         self._hide_controls()
         self._set_visual("missed", MISSED_RED, f"NEM FOGADOTT HÍVÁS{times} · {self._when}")
+        self.callback_row.setVisible(self._callback_allowed)
         self.actions.setVisible(True)
         self._fade(1.0, 120)
         self._place()
@@ -931,17 +968,18 @@ class CallOverlay(QWidget):
         """A missed-call card is dealt with once the user opened the contact or searched the number: it confirms
         the action for a moment, then goes."""
         if self._missed and self._close_on_action:
-            self.finish("✓ " + text, min(self._linger_ms or 1800, 1800), "done", INCOMING_GREEN)
+            self.finish(text, min(self._linger_ms or 1800, 1800), "done", INCOMING_GREEN)
 
     def _copy(self):
         QApplication.clipboard().setText(self._number)
-        self._flash(self.btn_copy, "✓ Másolva")
+        self._flash(self.btn_copy, "Másolva")
 
     def _flash(self, button: QPushButton, text: str, ms: int = 1300):
         """Micro-interaction: the button turns green with a confirmation, then restores itself."""
         orig = button.property("_orig") or button.text()
         button.setProperty("_orig", orig)
         button.setText(text)
+        button.setIcon(icons.icon("check", "green"))
         button.setObjectName("done")
         button.style().unpolish(button)
         button.style().polish(button)
@@ -956,6 +994,7 @@ class CallOverlay(QWidget):
             button.setProperty("_orig", None)
             button.style().unpolish(button)
             button.style().polish(button)
+            self._apply_icons()
         QTimer.singleShot(ms, restore)
 
     # ---- v0.8.0: hold / transfer -------------------------------------------------------------------------
@@ -986,7 +1025,7 @@ class CallOverlay(QWidget):
         on = self._controls_on and not (self._answered or self._ended or self._closing or self._missed)
         out = self._direction == "out"
         self.btn_answer.setVisible(not out)
-        self.btn_reject.setText("✕ Bontás" if out else "✕ Elutasít")
+        self.btn_reject.setText("Bontás" if out else "Elutasít")
         self.btn_reject.setToolTip("A hívás megszakítása" if out else "A hívás elutasítása")
         self.ring_controls.setVisible(on)
 
@@ -997,7 +1036,7 @@ class CallOverlay(QWidget):
             if w is not None:
                 w.deleteLater()
         if not self._extensions:
-            lab = QLabel("Nincs mentett mellék. Adja meg őket a főablakban: ☎ Mellékek…")
+            lab = QLabel("Nincs mentett mellék. Adja meg őket a Beállítások › Mellékek lapon.")
             lab.setObjectName("empty")
             lab.setWordWrap(True)
             self._xfer_grid.addWidget(lab, 0, 0, 1, 2)
@@ -1016,6 +1055,7 @@ class CallOverlay(QWidget):
 
     def _hide_controls(self):
         self.ring_controls.setVisible(False)
+        self.callback_row.setVisible(False)
         self.controls.setVisible(False)
         self.xfer_panel.setVisible(False)
         self.lbl_hint.setVisible(False)
@@ -1026,6 +1066,7 @@ class CallOverlay(QWidget):
     def _busy(self, on: bool, text: str = ""):
         for b in (self.btn_hold, self.btn_xfer, self.btn_hangup, self.btn_answer, self.btn_reject):
             b.setEnabled(not on)
+        self.btn_callback.setEnabled(not on and not getattr(self, "_callback_blocked", False))
         for i in range(self._xfer_grid.count()):
             w = self._xfer_grid.itemAt(i).widget()
             if isinstance(w, QPushButton):
@@ -1070,11 +1111,13 @@ class CallOverlay(QWidget):
         self._held = bool(held)
         if self._held:
             self._set_visual("hold", HOLD_PEACH, "TARTVA")
-            self.btn_hold.setText("▶ Folytatás")
+            self.btn_hold.setText("Folytatás")
+            self.btn_hold.setIcon(icons.icon("play", "text"))
             self.btn_hold.setToolTip("A hívás visszavétele a tartásból")
         else:
             self._set_visual("talk", ANSWERED_BLUE, "HÍVÁSBAN")
-            self.btn_hold.setText("⏸ Tartás")
+            self.btn_hold.setText("Tartás")
+            self.btn_hold.setIcon(icons.icon("pause", "text"))
             self.btn_hold.setToolTip("A hívás tartásba tétele (a hívó várakozik)")
         self._place()
 
@@ -1084,7 +1127,7 @@ class CallOverlay(QWidget):
             return
         self._busy(False)
         theme.set_tone(self.lbl_hint, None)
-        self.lbl_hint.setText("⚠ " + message)
+        self.lbl_hint.setText(message)
         self.lbl_hint.setVisible(True)
         self._hint_timer.start(7000)
         self._place()
@@ -1098,6 +1141,31 @@ class CallOverlay(QWidget):
         self.lbl_hint.setText(f"→ {name} · mellék {number}")
         self.lbl_hint.setVisible(True)
         self._place()
+
+    # ---- v0.10.0-beta.2: Visszahívás on a missed-call card ----------------------------------------------
+    def set_callback(self, allowed: bool, blocked: bool = False):
+        """allowed = Bria control on and a dialable number; blocked = a call rings / runs now (button disabled,
+        tooltip says why). Shown only on a missed-call card."""
+        self._callback_allowed = bool(allowed)
+        self._callback_blocked = bool(blocked)
+        self.btn_callback.setEnabled(not blocked)
+        self.btn_callback.setToolTip("Hívás közben nem indítható" if blocked else "A szám visszahívása a Briával")
+        if self._missed and not self._ended and not self._closing:
+            visible = self.callback_row.isVisible()
+            self.callback_row.setVisible(self._callback_allowed)
+            if visible != self._callback_allowed:
+                self._place()
+
+    def _request_callback(self):
+        if self._closing or self._ended or not self._missed or getattr(self, "_callback_blocked", False):
+            return
+        self._busy(True, "Visszahívás indítása…")
+        self.callback_requested.emit()
+
+    def callback_started(self):
+        """Bria started the call: the missed call is dealt with; the outgoing call gets its own card."""
+        self._busy(False)
+        self.finish("VISSZAHÍVÁS INDÍTVA", min(self._linger_ms or 1800, 1800), "done", INCOMING_GREEN)
 
     @property
     def is_held(self) -> bool:

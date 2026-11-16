@@ -15,12 +15,19 @@ from PySide6.QtWidgets import (
 )
 
 from settings import MAX_EXTENSIONS, clean_extension
+import icons
 import theme
 
 # v0.10.0: the table, form, primary / danger buttons are styled by theme.qss_main() (the dialog's style sheet).
 
 
 class ExtensionsEditor(QWidget):
+    def _apply_icons(self) -> None:
+        """v0.10.0-beta.2: drawn icons instead of ✎ ▲ ▼ (rebuilt on a theme switch)."""
+        self.btn_edit.setIcon(icons.icon("pencil", "text", 15))
+        self.btn_up.setIcon(icons.icon("chev_up", "text", 15))
+        self.btn_down.setIcon(icons.icon("chev_down", "text", 15))
+
     def __init__(self, settings, parent=None):
         super().__init__(parent)
         self.settings = settings
@@ -30,7 +37,7 @@ class ExtensionsEditor(QWidget):
         root.setSpacing(10)
 
         intro = QLabel("A kollégák belső mellékei. Ha a Bria engedi az átkapcsolást, a hívás kártyáján "
-                       "(↪ Átkapcsolás) ezekre lehet egy kattintással átkapcsolni, ebben a sorrendben.")
+                       "(Átkapcsolás) ezekre lehet egy kattintással átkapcsolni, ebben a sorrendben.")
         intro.setWordWrap(True)
         intro.setStyleSheet("font-size: 12px;")
         theme.set_tone(intro, "subtext")
@@ -57,14 +64,14 @@ class ExtensionsEditor(QWidget):
         tools = QHBoxLayout()
         self.btn_add = QPushButton("+ Új mellék")
         self.btn_add.clicked.connect(lambda: self._open_form(-1))
-        self.btn_edit = QPushButton("✎ Szerkesztés")
+        self.btn_edit = QPushButton("Szerkesztés")
         self.btn_edit.clicked.connect(lambda: self._open_form(self.table.currentRow()))
         self.btn_del = QPushButton("Törlés")
         self.btn_del.clicked.connect(self._ask_delete)
-        self.btn_up = QPushButton("▲")
+        self.btn_up = QPushButton("")
         self.btn_up.setToolTip("Feljebb (a kártyán is ebben a sorrendben jelennek meg)")
         self.btn_up.clicked.connect(lambda: self._move(-1))
-        self.btn_down = QPushButton("▼")
+        self.btn_down = QPushButton("")
         self.btn_down.setToolTip("Lejjebb")
         self.btn_down.clicked.connect(lambda: self._move(1))
         for b in (self.btn_add, self.btn_edit, self.btn_del, self.btn_up, self.btn_down):
@@ -72,6 +79,8 @@ class ExtensionsEditor(QWidget):
             tools.addWidget(b)
         tools.addStretch(1)
         root.addLayout(tools)
+        self._apply_icons()
+        theme.changed.connect(self._apply_icons)
 
         # ---- add / edit form (hidden until + Új mellék / ✎ Szerkesztés) ----
         self.form = QFrame(objectName="form")

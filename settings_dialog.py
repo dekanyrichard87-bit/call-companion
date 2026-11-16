@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+import icons
 import theme
 from extensions_dialog import ExtensionsEditor
 
@@ -262,7 +263,8 @@ class SettingsDialog(QDialog):
         lay.addWidget(self._hint("Bekapcsolva a tálcamenüben megjelennek a technikai eszközök: részletes állapot, "
                                  "MiniCRM és Bria ellenőrzés, hívásszimulátor, élő napló, frissítés keresése. "
                                  "A mindennapi használathoz nem szükséges."))
-        self.dev_open = QPushButton("🛠 Fejlesztői eszközök megnyitása")
+        self.dev_open = QPushButton("Fejlesztői eszközök megnyitása")
+        self.dev_open.setIcon(icons.icon("code", "text", 15))
         self.dev_open.setCursor(Qt.CursorShape.PointingHandCursor)
         self.dev_open.clicked.connect(self._open_dev)
         self.dev_open.setVisible(self.settings.dev_mode)
@@ -305,6 +307,8 @@ class SettingsDialog(QDialog):
 
     def _theme_changed(self) -> None:
         self.setStyleSheet(theme.qss_main())
+        if getattr(self, "dev_open", None) is not None:
+            self.dev_open.setIcon(icons.icon("code", "text", 15))
         for t in getattr(self, "_tiles", {}).values():
             t.update()
 

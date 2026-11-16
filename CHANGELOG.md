@@ -3,6 +3,38 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [0.10.0-beta.2] - 2026-11-16
+
+UI/UX revision, part 2 of 3: drawn icons, the new history row buttons and Visszahívás (call back), as drawn on the
+approved design canvas. beta.1 (themes) was verified live: the app follows Windows' theme while running and the title
+bars change with it.
+
+### Added
+- **Visszahívás (call back)**: Bria starts an outgoing call to the number (Bria Desktop API `GET /call`,
+  `bria_api.dial()`), with the MiniCRM name as display name. Offered for numbers with at least 6 digits and with Bria
+  control on; **disabled while a call rings or runs** (what Bria does with a second call is not tested). The same
+  number is not dialled twice within 3 s. Log: `callback requested (row|card) ...`, `bria api: call 06...4567 -> 200`.
+  - in every **history row** (green in missed rows): a green ✓ confirms the start, a failure shows its reason as a
+    tooltip;
+  - on the **missed-call card**: a full-width green *Visszahívás* button above MiniCRM / Google / Másolás; the card
+    confirms *VISSZAHÍVÁS INDÍTVA* and closes (the missed call is dealt with), a failure shows a red line.
+  - The number is sent in the national form (`+36...` -> `06...`, other countries `00...`). *Unverified* against the
+    provider's dial plan (the probe dialled a typed number): check the `bria api: call 06...` log line.
+- **Drawn icons** (`icons.py`, new): the line icons of the design canvas rendered with QtSvg (crisp at 150 %, in the
+  theme's colours, rebuilt on a theme switch); MiniCRM = drawn "M" in a rounded square, Google = drawn "G" in a
+  circle. Without QtSvg (should not happen) the old glyphs are shown and `icons: QtSvg not available` is logged.
+
+### Changed
+- **History row** (design canvas "Sorgombok – közelről"): time and four 32x32 buttons on the right, vertically
+  centred, order **Visszahívás · MiniCRM · Másolás · Google**; 72 % at rest (were 35 %), soft background on row hover,
+  stronger background + tooltip on the hovered button; empty slot when there is no MiniCRM profile; drawn direction
+  arrow in the status disc. Row height 62 px.
+- **Call card**: Felvesz, Elutasít, Bontás, Tartás / Folytatás, Átkapcsolás, MiniCRM, Google, Másolás / Másolva and ✕
+  have drawn icons (no emoji); the outcome texts lost their "✓ " prefix (the header icon shows it).
+- Main window: drawn ⚙ (Beállítások), search icon in the search box, copy icon on *Hibajelentés másolása* (green ✓
+  when copied), drawn chevrons on the day headers. Beállítások: *Fejlesztői eszközök megnyitása* and the extension
+  editor's *Szerkesztés* / up / down buttons have drawn icons.
+
 ## [0.10.0-beta.1] - 2026-11-16
 
 UI/UX revision, part 1 of 3 (0.10.0-beta): theme system with dark and light mode, as drawn on the approved design

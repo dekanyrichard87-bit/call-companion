@@ -23,14 +23,15 @@ from datetime import date, datetime, timedelta
 from enum import Enum
 
 from PySide6.QtCore import QEvent, QObject, QRect, QRectF, QSize, QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import (QColor, QCursor, QDesktopServices, QFont, QFontMetrics, QGuiApplication, QKeySequence,
-                           QPainter, QPen, QShortcut)
+from PySide6.QtGui import (QColor, QCursor, QDesktopServices, QFont, QFontMetrics, QGuiApplication, QIcon,
+                           QKeySequence, QPainter, QPen, QShortcut)
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QPushButton, QStyle, QStyledItemDelegate, QSystemTrayIcon, QToolTip, QVBoxLayout,
     QWidget,
 )
 
+import icons
 import theme
 
 log = logging.getLogger("callcompanion.status")
@@ -372,43 +373,64 @@ class DayHeader:
 
 
 ROLE = Qt.ItemDataRole.UserRole
-ACTIONS = (("crm", "🔍", "MiniCRM megnyitása"), ("copy", "📋", "Szám másolása"), ("google", "🌐", "Google keresés"))
+# v0.10.0-beta.2 row actions, left to right (design canvas "Sorgombok – közelről"): kind, icon, tooltip
+ACTIONS = (("callback", "phone", "Visszahívás"), ("crm", "crm", "MiniCRM megnyitása"),
+           ("copy", "copy", "Szám másolása"), ("google", "google", "Google keresés"))
+IN_CALL_TIP = "Hívás közben nem indítható"
+
+
+def dialable(number: str) -> bool:
+    """Visszahívás is offered for numbers with at least 6 digits (not for extensions / "Anonymous")."""
+    return sum(ch.isdigit() for ch in str(number or "")) >= 6
 
 
 class CallDelegate(QStyledItemDelegate):
-    """v0.9.0 call list painter: day headers and two-line call rows. The right column of a row is reserved and
-    never shrinks: the time on line 1, the three row actions (🔍 📋 🌐) on line 2 - faint at rest, full colour on
-    row hover, a soft disc under the hovered one. Clicks on an action are handled here (editorEvent), so a row
-    needs no widgets and no selection to act."""
+    """Call list painter: day headers and two-line call rows (v0.10.0-beta.2 layout).
+    Right side of a row, vertically centred: the time (12 px), then four 32x32 buttons
+    Visszahívás · MiniCRM · Másolás · Google. At rest they show at 72 % (in a missed row the Visszahívás icon is
+    always green), on row hover all get a soft background, the hovered one a stronger one and a tooltip. An empty
+    slot keeps its place (no MiniCRM profile, a number that cannot be dialled back). Clicks are handled here
+    (editorEvent), so a row needs no widgets and no selection to act."""
     H, HH = 62, 36                    # call row / day header height
-    BTN_W, BTN_H, BTN_GAP = 26, 22, 4
+    BTN, BTN_GAP, TIME_W = 32, 2, 40
     NARROW = 480                      # below this row width the company tag moves to line 2
-    action = Signal(object, str)      # CallRecord, "crm" | "copy" | "google"
+    action = Signal(object, str)      # CallRecord, "callback" | "crm" | "copy" | "google"
 
     def __init__(self, view):
         super().__init__(view)
         self.view = view
         self.hover: tuple[int, str | None] | None = None      # (row, action under the mouse)
-        self.copied: dict[str, float] = {}                     # call_id -> monotonic time until the ✓ shows
+        self.copied: dict[str, float] = {}                     # call_id -> monotonic time until the copy ✓ shows
+        self.called: dict[str, float] = {}                     # call_id -> time until the Visszahívás ✓ shows
+        self.can_dial = False                                  # bria_api enabled (set by the main window)
+        self.in_call = False                                   # a call is ringing / running: no Visszahívás
 
     # ---- geometry ------------------------------------------------------------------------------------------------
     def sizeHint(self, option, index):
         return QSize(0, self.HH if isinstance(index.data(ROLE), DayHeader) else self.H)
 
+    def _buttons_w(self) -> int:
+        return len(ACTIONS) * self.BTN + (len(ACTIONS) - 1) * self.BTN_GAP
+
     def _right_col_w(self) -> int:
-        return 3 * self.BTN_W + 2 * self.BTN_GAP
+        """Time + gap + buttons: reserved, never shrinks."""
+        return self.TIME_W + 12 + self._buttons_w()
+
+    def _visible(self, kind: str, c: CallRecord) -> bool:
+        if kind == "callback":
+            return self.can_dial and dialable(c.number)
+        if kind == "crm":
+            return bool(c.profile_url)
+        return bool(c.number)
 
     def action_rects(self, r: QRect, c: CallRecord) -> dict:
-        """kind -> QRect of the row actions (MiniCRM only when the caller is in MiniCRM; its slot stays empty)."""
-        x = r.right() - 10 - self._right_col_w()
-        y = r.top() + 31
+        """kind -> QRect of the visible row actions; a hidden one leaves its slot empty."""
+        x = r.right() - 10 - self._buttons_w() + 1
+        y = r.center().y() - self.BTN // 2 + 1
         out = {}
-        for i, (kind, _g, _t) in enumerate(ACTIONS):
-            if kind == "crm" and not c.profile_url:
-                continue
-            if kind in ("copy", "google") and not c.number:
-                continue
-            out[kind] = QRect(x + i * (self.BTN_W + self.BTN_GAP), y, self.BTN_W, self.BTN_H)
+        for i, (kind, _ic, _t) in enumerate(ACTIONS):
+            if self._visible(kind, c):
+                out[kind] = QRect(x + i * (self.BTN + self.BTN_GAP), y, self.BTN, self.BTN)
         return out
 
     def hit(self, option, index, pos) -> str | None:
@@ -432,18 +454,29 @@ class CallDelegate(QStyledItemDelegate):
         if kind is None or event.button() not in (Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton):
             return False
         if et == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
-            self.action.emit(index.data(ROLE), kind)
+            if not (kind == "callback" and self.in_call):           # disabled during a call (tooltip says why)
+                self.action.emit(index.data(ROLE), kind)
         return et != QEvent.Type.MouseMove        # a click on an action never selects the row
+
+    def tooltip(self, kind: str, c: CallRecord) -> str:
+        if kind == "callback":
+            return IN_CALL_TIP if self.in_call else f"Visszahívás: {c.number}"
+        return next(t for k, _i, t in ACTIONS if k == kind)
 
     def helpEvent(self, event, view, option, index):
         kind = self.hit(option, index, event.pos())
         if kind:
-            QToolTip.showText(event.globalPos(), next(t for k, _g, t in ACTIONS if k == kind), view)
+            QToolTip.showText(event.globalPos(), self.tooltip(kind, index.data(ROLE)), view)
             return True
         return super().helpEvent(event, view, option, index)
 
     def flash_copied(self, call_id: str, ms: int = 1300):
         self.copied[call_id] = time.monotonic() + ms / 1000
+        self.view.viewport().update()
+        QTimer.singleShot(ms + 30, self.view.viewport().update)
+
+    def flash_called(self, call_id: str, ms: int = 1600):
+        self.called[call_id] = time.monotonic() + ms / 1000
         self.view.viewport().update()
         QTimer.singleShot(ms + 30, self.view.viewport().update)
 
@@ -465,10 +498,9 @@ class CallDelegate(QStyledItemDelegate):
             p.setBrush(QColor(pal.row_hover if pal.light else pal.surface))
             p.drawRoundedRect(r, 8, 8)
         x = r.left() + 8
-        p.setFont(_font(12, QFont.Weight.DemiBold))
-        p.setPen(QColor(pal.subtext))
-        p.drawText(QRect(x, r.top(), 14, r.height()), Qt.AlignmentFlag.AlignCenter, "▾" if h.expanded else "▸")
-        x += 18
+        icons.paint(p, "chev_down" if h.expanded else "chev_right",
+                    QRectF(x, r.center().y() - 6.5, 14, 14), "subtext")
+        x += 20
         parts = [(h.label, pal.text, True), (f"{h.count} hívás", pal.subtext, False)]
         if h.missed:
             parts.append((f"{h.missed} nem fogadott", pal.missed_text, False))
@@ -511,29 +543,28 @@ class CallDelegate(QStyledItemDelegate):
             p.setBrush(QColor(pal.burgundy))
             p.drawRoundedRect(QRect(r.left(), r.top() + 8, 4, r.height() - 16), 2, 2)
 
-        # status disc with the direction arrow
-        col = QColor(pal[STATUS_COLOR.get(c.status, "text")])
+        # status disc with the drawn direction arrow (in / out / missed cross)
+        role = STATUS_COLOR.get(c.status, "text")
+        col = QColor(pal[role])
         disc = QRect(r.left() + 14, r.center().y() - 15, 30, 30)
         fill = QColor(col)
         fill.setAlpha(45 if not pal.light else 40)
         p.setBrush(fill)
         p.drawEllipse(disc)
-        p.setPen(col)
-        p.setFont(_font(14, QFont.Weight.Bold))
-        arrow = "↗" if c.direction == "out" else ("↙" if c.status != "missed" else "✕")
-        p.drawText(disc, Qt.AlignmentFlag.AlignCenter, arrow)
+        arrow = "arrow_out" if c.direction == "out" else ("missed" if missed else "arrow_in")
+        icons.paint(p, arrow, QRectF(disc).adjusted(7.5, 7.5, -7.5, -7.5), role)
 
-        # reserved right column: time (line 1) and the row actions (line 2)
-        col_w = self._right_col_w()
-        col_left = r.right() - 10 - col_w
+        # reserved right side: time (vertically centred) and the four row actions
+        btn_left = r.right() - 10 - self._buttons_w() + 1
+        time_left = btn_left - 12 - self.TIME_W
         p.setFont(_font(12))
         p.setPen(QColor(pal.subtext))
-        p.drawText(QRect(col_left, r.top() + 9, col_w, 20), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                   c.started.strftime("%H:%M"))
+        p.drawText(QRect(time_left, r.top(), self.TIME_W, r.height()),
+                   Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, c.started.strftime("%H:%M"))
         self._paint_actions(p, r, c, index.row(), hover)
 
         x0 = disc.right() + 12
-        right = col_left - 10
+        right = time_left - 10
         avail = max(0, right - x0)
         narrow = r.width() < self.NARROW
         # line 1: name (bold) + company tag; the tag shrinks before the name does
@@ -552,13 +583,13 @@ class CallDelegate(QStyledItemDelegate):
         name_txt = nfm.elidedText(title, Qt.TextElideMode.ElideRight, max(30, avail - (tag_w + 8 if tag_w else 0)))
         p.setFont(nf)
         p.setPen(QColor(pal[tcolor]))
-        y1 = r.top() + 9
+        y1 = r.top() + 7
         p.drawText(QRect(x0, y1, avail, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name_txt)
         if tag_w:
             self._paint_tag(p, QRect(x0 + nfm.horizontalAdvance(name_txt) + 8, y1 + 1, tag_w, 18), company, cf, cfm)
 
         # line 2: [company tag when narrow] number · outcome · duration · note
-        x, y2 = x0, r.top() + 33
+        x, y2 = x0, r.top() + 31
         if company and narrow:
             tw = min(cfm.horizontalAdvance(company) + 16, max(0, avail // 2))
             if tw >= 40:
@@ -610,30 +641,46 @@ class CallDelegate(QStyledItemDelegate):
 
     def _paint_actions(self, p: QPainter, r: QRect, c: CallRecord, row: int, row_hover: bool):
         hovered = self.hover[1] if self.hover and self.hover[0] == row else None
-        copied = self.copied.get(c.call_id, 0) > time.monotonic()
+        now = time.monotonic()
         pal = theme.palette()
+        missed = c.status == "missed"
         for kind, q in self.action_rects(r, c).items():
-            glyph = next(g for k, g, _t in ACTIONS if k == kind)
-            if kind == "copy" and copied:
+            ic = next(i for k, i, _t in ACTIONS if k == kind)
+            flashed = (kind == "copy" and self.copied.get(c.call_id, 0) > now) or \
+                      (kind == "callback" and self.called.get(c.call_id, 0) > now)
+            p.setPen(Qt.PenStyle.NoPen)
+            if flashed:                                    # green ✓ confirmation (copied / call started)
                 p.setOpacity(1.0)
-                p.setPen(Qt.PenStyle.NoPen)
                 ok = QColor(pal.green)
                 ok.setAlpha(50 if not pal.light else 34)
                 p.setBrush(ok)
-                p.drawRoundedRect(q, 7, 7)
-                p.setFont(_font(13, QFont.Weight.Bold))
-                p.setPen(QColor(pal.green))
-                p.drawText(q, Qt.AlignmentFlag.AlignCenter, "✓")
+                p.drawRoundedRect(q, 8, 8)
+                icons.paint(p, "check", QRectF(q).adjusted(8, 8, -8, -8), "green")
                 continue
-            if kind == hovered:
+            disabled = kind == "callback" and self.in_call
+            green = kind == "callback" and missed and not disabled
+            if hovered == kind and not disabled:
+                bg = QColor(pal.green) if green else QColor(*pal.hover_rgba)
+                if green:
+                    bg.setAlpha(70 if not pal.light else 44)
+            elif row_hover and not disabled:
+                bg = QColor(pal.green) if green else QColor(*pal.soft_rgba)
+                if green:
+                    bg.setAlpha(56 if not pal.light else 30)
+            else:
+                bg = None
+            if bg is not None:
                 p.setOpacity(1.0)
-                p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(QColor(*pal.hover_rgba))
-                p.drawRoundedRect(q, 7, 7)
-            p.setOpacity(1.0 if kind == hovered else (0.85 if row_hover else 0.35))
-            p.setFont(_font(12, emoji=True))
-            p.setPen(QColor(pal.text))
-            p.drawText(q, Qt.AlignmentFlag.AlignCenter, glyph)
+                p.setBrush(bg)
+                p.drawRoundedRect(q, 8, 8)
+            if disabled:
+                p.setOpacity(0.3)
+            elif row_hover or hovered == kind or green:
+                p.setOpacity(1.0)
+            else:
+                p.setOpacity(0.72)
+            inset = 8.5 if kind in ("crm", "google") else 8
+            icons.paint(p, ic, QRectF(q).adjusted(inset, inset, -inset, -inset), "green" if green else "text")
         p.setOpacity(1.0)
 
 
@@ -643,7 +690,8 @@ class CallDelegate(QStyledItemDelegate):
 
 class MainWindow(QWidget):
     """Normal user window: plain status + call history. Signals are wired in main.py."""
-    open_settings = Signal()            # v0.9.0: ⚙ gear (Beállítások: Mellékek, Fejlesztői mód, Névjegy)
+    open_settings = Signal()            # v0.9.0: ⚙ gear (Beállítások: Mellékek, Megjelenés, Fejlesztői mód, Névjegy)
+    callback_requested = Signal(object)  # v0.10.0-beta.2: Visszahívás from a history row (CallRecord)
 
     TYPE_FILTERS = (("all", "Összes"), ("missed", "Nem fogadott"))
     DATE_FILTERS = (("any", "Bármikor"), ("today", "Mai"), ("yesterday", "Tegnap"), ("week", "A héten"),
@@ -690,11 +738,12 @@ class MainWindow(QWidget):
         txt.addWidget(self.st_hint)
         txt.addWidget(self.st_code)
         cl.addLayout(txt, 1)
-        self.report_btn = QPushButton("📋 Hibajelentés másolása")
+        self.report_btn = QPushButton("Hibajelentés másolása")
         self.report_btn.setToolTip("A hiba leírása a vágólapra kerül (hívóadatok nélkül) – illessze be egy e-mailbe.")
         self.report_btn.clicked.connect(self._copy_report)
         cl.addWidget(self.report_btn, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.gear = QPushButton("⚙", objectName="gear")
+        self.gear = QPushButton("", objectName="gear")
+        self.gear.setIconSize(QSize(18, 18))
         self.gear.setToolTip("Beállítások")
         self.gear.setCursor(Qt.CursorShape.PointingHandCursor)
         self.gear.clicked.connect(self.open_settings.emit)
@@ -715,6 +764,7 @@ class MainWindow(QWidget):
         self.search = QLineEdit()
         self.search.setPlaceholderText("Keresés név, cég vagy telefonszám alapján…")
         self.search.setClearButtonEnabled(True)
+        self._search_act = self.search.addAction(QIcon(), QLineEdit.ActionPosition.LeadingPosition)
         self.search.textChanged.connect(lambda _t: self._filters_changed())
         root.addWidget(self.search)
 
@@ -755,6 +805,7 @@ class MainWindow(QWidget):
         self._summary_timer.timeout.connect(self._refresh_summary)
         model.changed.connect(self._model_changed)
         theme.changed.connect(self._theme_changed)
+        self._apply_icons()
         self.refresh()
 
     # ------------------------------------------------------------ helpers --
@@ -843,9 +894,30 @@ class MainWindow(QWidget):
         return False
 
     # ------------------------------------------------------------ refresh --
+    def _apply_icons(self) -> None:
+        """v0.10.0-beta.2 drawn icons (rebuilt on a theme switch: their colours come from the palette)."""
+        self.gear.setIcon(icons.icon("gear", "subtext", 18))
+        if self.report_btn.objectName() != "done":
+            self.report_btn.setIcon(icons.icon("copy", "text", 15))
+        self._search_act.setIcon(icons.icon("search", "subtext", 15, disabled=None))
+
+    def set_dial_state(self, can_dial: bool, in_call: bool) -> None:
+        """Visszahívás: offered when Bria control is on; disabled while a call rings / runs (main.py)."""
+        if (can_dial, in_call) != (self.delegate.can_dial, self.delegate.in_call):
+            self.delegate.can_dial, self.delegate.in_call = bool(can_dial), bool(in_call)
+            self.list.viewport().update()
+
+    def callback_result(self, call_id: str, ok: bool, message: str = "") -> None:
+        """The Visszahívás request finished: green ✓ on the row, or the reason as a tooltip at the mouse."""
+        if ok:
+            self.delegate.flash_called(call_id)
+        elif self.isVisible():
+            QToolTip.showText(QCursor.pos(), message or "A visszahívás nem sikerült", self.list)
+
     def _theme_changed(self) -> None:
         """v0.10.0: live dark / light switch: new style sheet, repaint the painted list."""
         self.setStyleSheet(theme.qss_main())
+        self._apply_icons()
         self._refresh_summary()
         self.list.viewport().update()
 
@@ -966,7 +1038,10 @@ class MainWindow(QWidget):
     def _row_action(self, c: CallRecord, kind: str) -> None:
         if not isinstance(c, CallRecord):
             return
-        if kind == "crm" and c.profile_url:
+        if kind == "callback":
+            if not self.delegate.in_call and self.delegate.can_dial and dialable(c.number):
+                self.callback_requested.emit(c)
+        elif kind == "crm" and c.profile_url:
             QDesktopServices.openUrl(QUrl(c.profile_url))
         elif kind == "google" and c.number:
             from urllib.parse import quote
@@ -984,18 +1059,21 @@ class MainWindow(QWidget):
     def _copy_report(self) -> None:
         QApplication.clipboard().setText(self.model.report_text(self.version))
         log.info("problem report copied to the clipboard (%s)", self.model.summary().code)
-        flash(self.report_btn, "✓ A vágólapra másolva")
+        flash(self.report_btn, "A vágólapra másolva")
 
 
 StatusWindow = MainWindow       # old name (0.3 - 0.5)
 
 
 def flash(button: QPushButton, text: str, ms: int = 1400) -> None:
-    """Micro-interaction: the button briefly turns green with a confirmation text, then restores itself."""
+    """Micro-interaction: the button briefly turns green with a drawn ✓ and a confirmation text, then restores
+    itself (text, object name and icon)."""
     if button.property("_flash_orig") is None:
         button.setProperty("_flash_orig", button.text())
         button.setProperty("_flash_name", button.objectName())
+        button.setProperty("_flash_icon", button.icon())
     button.setText(text)
+    button.setIcon(icons.icon("check", "green", 15))
     button.setObjectName("done")
     button.style().unpolish(button)
     button.style().polish(button)
@@ -1008,6 +1086,8 @@ def flash(button: QPushButton, text: str, ms: int = 1400) -> None:
                 return
             button.setText(button.property("_flash_orig"))
             button.setObjectName(button.property("_flash_name") or "")
+            ic = button.property("_flash_icon")
+            button.setIcon(ic if isinstance(ic, QIcon) else QIcon())
             button.setProperty("_flash_orig", None)
             button.style().unpolish(button)
             button.style().polish(button)
@@ -1065,6 +1145,8 @@ def _demo() -> int:
         SettingsDialog(st, "demo", update_state=lambda: "Up to date (demo)", check_updates=lambda: None,
                        set_dev_mode=lambda on: None, parent=win).exec()
     win.open_settings.connect(open_settings)
+    win.set_dial_state(True, False)              # preview: Visszahívás only confirms, nothing is dialled
+    win.callback_requested.connect(lambda c: win.callback_result(c.call_id, True))
     win.show_and_raise()
     app.setQuitOnLastWindowClosed(True)
     return app.exec()

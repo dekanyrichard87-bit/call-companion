@@ -98,6 +98,19 @@ def digits_tail(s: str, n: int = 9) -> str:
     return re.sub(r"\D", "", user)[-n:]
 
 
+def dial_string(number: str) -> str:
+    """v0.10.0: what Bria dials for a number of the call history ("+36301234567"): the national form a Hungarian
+    user types (06301234567); other countries 00<code>...; extensions / other forms unchanged (digits, * # only).
+    UNVERIFIED with Opennetworks' dial plan for the +36 form (the probe of 2026-11-13 dialled a typed number); the
+    log line `bria api: call 06...4567 -> 200` shows the form sent."""
+    s = re.sub(r"[^0-9*#+]", "", str(number or ""))
+    if s.startswith("+36"):
+        return "06" + s[3:]
+    if s.startswith("+"):
+        return "00" + s[1:]
+    return s
+
+
 def xml_escape(s: str) -> str:
     return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             .replace('"', "&quot;").replace("'", "&apos;"))
@@ -390,6 +403,25 @@ class BriaApi:
     def check_transfer(self) -> bool | None:
         """Worker thread: refresh the transfer capability (one short connection)."""
         return self._session(self._probe_transfer)
+
+    def dial(self, number: str, name: str = "") -> None:
+        """v0.10.0: start an outgoing audio call (Visszahívás). Body verified live 2026-11-13 with
+        tools/bria_capabilities_probe.py (the call started). The card of the outgoing call then comes from Bria's
+        log as for any call dialled in Bria."""
+        digits = dial_string(number)
+        if sum(ch.isdigit() for ch in digits) < 6:
+            raise BriaApiError("BRIA-API-TARGET", "Ez a szám nem hívható vissza")
+        shown = " ".join(str(name or "").split())[:60]
+
+        def run(ws):
+            body = (f"<dial>\r\n <type>audio</type>\r\n <number>{xml_escape(digits)}</number>\r\n"
+                    + (f" <displayName>{xml_escape(shown)}</displayName>\r\n" if shown else "") + "</dial>")
+            code, resp = self._request(ws, "call", body)
+            if code != 200:
+                log.warning("bria api: call %s...%s -> %s body=%r", digits[:2], digits_tail(digits, 4), code, _flat(resp))
+                raise BriaApiError("BRIA-API-HTTP", f"A Bria nem indította el a hívást ({code})", f"call -> {code}")
+            log.info("bria api: call %s...%s -> 200", digits[:2], digits_tail(digits, 4))
+        self._session(run)
 
     def answer(self, number: str) -> None:
         """Answer the ringing call with this number (audio only). Unverified on a real call: the capabilities

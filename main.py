@@ -25,7 +25,7 @@ from history import HistoryStore
 from local_api import LocalApi
 from overlay import CallOverlay
 from settings import Settings
-from status_window import Health, MainWindow, StatusModel, attach_to_tray
+from status_window import Health, MainWindow, StatusModel, attach_to_tray, dialable
 from version import __version__
 
 log = logging.getLogger("callcompanion")
@@ -90,6 +90,9 @@ class Controller(QObject):
     bria_sig = Signal(str, str, bool, str, object)   # v0.8.0: call_id, action, ok, message, extra
     bria_check_sig = Signal(bool, str)                # v0.8.0: developer window "Bria vezérlés ellenőrzése"
     bria_caps_sig = Signal()                          # v0.9.0: the transfer capability check finished
+    dial_sig = Signal(str, str, bool, str)            # v0.10.0-beta.2 Visszahívás: origin, call_id, ok, message
+    row_dial_sig = Signal(str, bool, str)             # -> main window: call_id, ok, message
+    dial_state_sig = Signal(bool, bool)               # -> main window: Bria control on, a call rings / runs
 
     def __init__(self, cfg: dict, store: HistoryStore | None = None, settings: Settings | None = None):
         super().__init__()
@@ -124,6 +127,8 @@ class Controller(QObject):
         self.company_sig.connect(self.on_company)
         self.bria_sig.connect(self.on_bria_result)
         self.bria_caps_sig.connect(self._apply_call_controls)
+        self.dial_sig.connect(self.on_dial_result)
+        self._last_dial = ("", 0.0)               # number, time.monotonic(): no double call within 3 s
         if settings is not None:
             settings.changed.connect(self._extensions_changed)
 
@@ -334,6 +339,8 @@ class Controller(QObject):
             ov.hold_requested.connect(lambda hold, cid=cid, ov=ov: self._bria_action(cid, ov, "hold", hold))
             ov.transfer_requested.connect(
                 lambda number, name, cid=cid, ov=ov: self._bria_action(cid, ov, "transfer", (number, name)))
+            ov.callback_requested.connect(
+                lambda cid=cid, ov=ov: self.call_back("card", cid, ov.number if isValid(ov) else ""))
         self.overlay = ov
         return ov
 
@@ -372,6 +379,7 @@ class Controller(QObject):
                 old.end()
         self.overlay = None
         self.missed[call_id] = ov
+        ov.set_callback(self.bria_api.enabled and dialable(ov.number), blocked=False)
         ov.set_missed(count, when)
         limit = max(1, int(self.cfg["ui"].get("missed_max", 4)))     # the stack must fit on the screen
         while len(self.missed) > limit:
@@ -451,6 +459,70 @@ class Controller(QObject):
                     else:
                         ov.finish(self.END_TEXT.get(outcome, "HÍVÁS BEFEJEZVE"))     # lingers, then fades
                 self.current_id = None   # reset even if the card already faded out
+        self._update_dial_state()
+
+    # ---- v0.10.0-beta.2: Visszahívás ---------------------------------------------------------------
+    def in_call(self) -> bool:
+        """A call rings or runs on this phone now (Visszahívás is disabled meanwhile: what Bria does with a second
+        call is not tested)."""
+        return self.current_id is not None
+
+    def _update_dial_state(self):
+        busy = self.in_call()
+        for cid, card in list(self.missed.items()):
+            if isValid(card):
+                card.set_callback(self.bria_api.enabled and dialable(card.number), blocked=busy)
+        self.dial_state_sig.emit(self.bria_api.enabled, busy)
+
+    def call_back(self, origin: str, call_id: str, number: str, name: str | None = None):
+        """Visszahívás from a history row ("row") or a missed-call card ("card"): Bria dials on a worker thread;
+        the outgoing call then shows its normal card from Bria's log."""
+        if name is None:
+            rec = next((c for c in self.status.calls if c.call_id == call_id), None)
+            name = rec.name if rec else ""
+        digits = "".join(ch for ch in str(number or "") if ch.isdigit())
+        log.info("callback requested (%s) for call %s ...%s", origin, call_id, digits[-4:])
+        if not self.bria_api.enabled or not dialable(number):
+            self.dial_sig.emit(origin, call_id, False, "Ez a szám nem hívható vissza")
+            return
+        if self.in_call():
+            self.dial_sig.emit(origin, call_id, False, "Hívás közben nem indítható")
+            return
+        last, at = self._last_dial
+        if last == digits and time.monotonic() - at < 3.0:
+            log.info("callback ignored: the same number was dialled %.1f s ago", time.monotonic() - at)
+            self.dial_sig.emit(origin, call_id, True, "")
+            return
+        self._last_dial = (digits, time.monotonic())
+
+        def job():
+            try:
+                self.bria_api.dial(number, name or "")
+                self.dial_sig.emit(origin, call_id, True, "")
+            except BriaApiError as e:
+                log.warning("callback failed: %s", e)
+                self.dial_sig.emit(origin, call_id, False, e.user_text)
+            except Exception as e:
+                log.exception("callback crashed")
+                self.dial_sig.emit(origin, call_id, False, f"Váratlan hiba ({e.__class__.__name__})")
+        try:
+            self.pool.submit(job)
+        except RuntimeError:
+            pass
+
+    def on_dial_result(self, origin: str, call_id: str, ok: bool, message: str):
+        now = time.strftime("%H:%M:%S")
+        if ok:
+            self.status.set_bria_api(Health.OK, f"Rendben • utolsó művelet {now} (visszahívás)")
+        if origin == "card":
+            ov = self.missed.get(call_id)
+            if ov is not None and isValid(ov):
+                if ok:
+                    ov.callback_started()
+                else:
+                    ov.control_failed(message)
+        else:
+            self.row_dial_sig.emit(call_id, ok, message)
 
     def _safe_lookup(self, number):
         try:
@@ -751,6 +823,10 @@ def main():
                        open_dev_tools=dev.show_and_raise, parent=win).exec()
 
     win.open_settings.connect(open_settings)              # v0.9.0: ⚙ gear in the main window
+    win.callback_requested.connect(lambda c: ctl.call_back("row", c.call_id, c.number, c.name or ""))
+    ctl.row_dial_sig.connect(win.callback_result)
+    ctl.dial_state_sig.connect(win.set_dial_state)
+    win.set_dial_state(ctl.bria_api.enabled, False)
     menu.aboutToShow.connect(build_menu)              # also refreshes the update tooltip
     build_menu()
     tray.setContextMenu(menu)
