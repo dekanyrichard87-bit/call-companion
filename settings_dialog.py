@@ -247,6 +247,17 @@ class SettingsDialog(QDialog):
         lay.addWidget(self._hint("A „Rendszer szerint” a Windows alkalmazás-témáját követi (Beállítások › "
                                  "Személyre szabás › Színek). A váltás azonnal érvényes, újraindítás nélkül – a "
                                  "hívókártyára is."))
+        lay.addSpacing(6)
+        head2 = QLabel("Hívás a főablakban")                 # v0.10.0-beta.3
+        head2.setStyleSheet("font-size: 13px; font-weight: 600;")
+        lay.addWidget(head2)
+        self.panel_switch = QCheckBox("Ha a főablak aktív, ott jelenjen meg a hívás (kártya helyett)")
+        self.panel_switch.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.panel_switch.setChecked(self.settings.call_in_window)
+        self.panel_switch.toggled.connect(self.settings.set_call_in_window)
+        lay.addWidget(self.panel_switch)
+        lay.addWidget(self._hint("Ha az ablak elveszti a fókuszt, kis méretre kerül vagy bezárod, a hívás azonnal "
+                                 "a kártyára kerül."))
         lay.addStretch(1)
         return w
 

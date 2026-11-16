@@ -128,6 +128,7 @@ class Controller(QObject):
         self.bria_sig.connect(self.on_bria_result)
         self.bria_caps_sig.connect(self._apply_call_controls)
         self.dial_sig.connect(self.on_dial_result)
+        self.panel_host = None                    # v0.10.0-beta.3: the main window (call panel), set by main()
         self._last_dial = ("", 0.0)               # number, time.monotonic(): no double call within 3 s
         if settings is not None:
             settings.changed.connect(self._extensions_changed)
@@ -138,7 +139,8 @@ class Controller(QObject):
         The auto-updater waits for this to become False before it restarts the app."""
         if self.current_id is not None or self._calls:
             return True
-        return any(isValid(card) for card in self.missed.values())
+        # v0.10.0-beta.3: a missed call shown in the main window's call panel does not hold the update back
+        return any(isValid(card) and not card.suppressed for card in self.missed.values())
 
     def start_services(self):
         la = self.cfg["local_api"]
@@ -401,6 +403,9 @@ class Controller(QObject):
 
     def _drop_overlay(self):
         ov, self.overlay = self.overlay, None
+        host = self.panel_host
+        if ov is not None and host is not None and host.panel.card is ov:
+            host.panel.drop()                 # v0.10.0-beta.3: the panel lets go of a card that is replaced
         if ov is not None and isValid(ov):
             try:
                 ov.hide()
@@ -443,7 +448,14 @@ class Controller(QObject):
             self.status.call_ringing(ev.call_id, ev.number, ev.direction)
             self._drop_overlay()
             self.current_id = ev.call_id
-            self._new_overlay().show_ringing(ev.number, ev.direction)    # immediate: number only
+            ov = self._new_overlay()
+            in_panel = self._panel_wanted()
+            if in_panel:                            # v0.10.0-beta.3: the active main window shows the call
+                ov.suppress()
+            ov.show_ringing(ev.number, ev.direction)    # immediate: number only
+            if in_panel:
+                self.panel_host.show_call(ov)
+                log.info("panel: call %s in main window (%s)", ev.call_id, "out" if ev.direction == "out" else "in")
             fut = self.pool.submit(self._safe_lookup, ev.number)
             fut.add_done_callback(lambda f, cid=ev.call_id: self.lookup_sig.emit(cid, f.result()))
             self._maybe_check_transfer()
@@ -460,6 +472,15 @@ class Controller(QObject):
                         ov.finish(self.END_TEXT.get(outcome, "HÍVÁS BEFEJEZVE"))     # lingers, then fades
                 self.current_id = None   # reset even if the card already faded out
         self._update_dial_state()
+
+    def _panel_wanted(self) -> bool:
+        host = self.panel_host
+        if host is None or (self.settings is not None and not self.settings.call_in_window):
+            return False
+        try:
+            return bool(host.panel_ready())
+        except RuntimeError:
+            return False
 
     # ---- v0.10.0-beta.2: Visszahívás ---------------------------------------------------------------
     def in_call(self) -> bool:
@@ -826,6 +847,7 @@ def main():
     win.callback_requested.connect(lambda c: ctl.call_back("row", c.call_id, c.number, c.name or ""))
     ctl.row_dial_sig.connect(win.callback_result)
     ctl.dial_state_sig.connect(win.set_dial_state)
+    ctl.panel_host = win                                  # v0.10.0-beta.3: call panel in the active main window
     win.set_dial_state(ctl.bria_api.enabled, False)
     menu.aboutToShow.connect(build_menu)              # also refreshes the update tooltip
     build_menu()

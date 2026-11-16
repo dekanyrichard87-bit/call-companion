@@ -3,6 +3,37 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [0.10.0-beta.3] - 2026-11-16
+
+UI/UX revision, part 3 of 3: the call shows inside the main window while it is the active window, and the history
+rows show the day of older calls. Next: 1.0.0-rc.
+
+### Added
+- **Call panel in the main window** (`call_panel.py`, design canvas "Hívás a főablakban – 0.10"): when the main
+  window is the active, visible window, a call - **incoming and outgoing** (user decision: the goal is to hide Bria
+  completely) - opens between the status card and HÍVÁSELŐZMÉNYEK instead of the pop-up card, with the card's states
+  and buttons (Felvesz / Elutasít, Tartás / Folytatás, Bontás, MiniCRM, Google, Másolás, ✕; *a kártya helyett, mert a
+  főablak aktív*). The card is still created and does all the work, hidden; the panel mirrors it and presses its
+  buttons, so every action behaves exactly as on the card.
+  - The window loses the focus, is minimised or closed during the call -> the card appears **at once** and stays a
+    card (it does not jump back when you return).
+  - A **missed call** stays in the panel (burgundy, Visszahívás / MiniCRM / Google / Másolás / ✕) until handled; if
+    you leave the window first it becomes a missed-call card. A new call takes the panel and moves the missed one to a
+    card. A missed call shown in the panel does not hold an update back (it is in the history).
+  - Átkapcsolás in the panel moves the call to the card (the colleague list lives there).
+  - Switch on ⚙ Beállítások > Megjelenés: *Ha a főablak aktív, ott jelenjen meg a hívás (kártya helyett)*
+    (`settings.json` `call_in_window`, default on).
+  - Log: `panel: call <id> in main window (in|out)`, `panel: window deactivated|minimised|hidden -> card`,
+    `panel: new call -> card`, `call in main window: on|off`.
+- **Day of older calls in the history rows** (user request 2026-11-16): under the time, small and muted: *Tegnap*,
+  *Tegnapelőtt*, *nov. 10.*, other years *2025. dec. 3.*; today's calls show only the time. The right column is 36 px
+  wider.
+
+### Changed
+- `overlay.CallOverlay`: `suppress()` / `unsuppress()`, `snapshot()`, `changed` signal; a suppressed card has no
+  window, no placement and no animation timer.
+- `theme.py`: the card's button rules are shared with the panel (`_card_buttons`, `qss_panel`).
+
 ## [0.10.0-beta.2.1] - 2026-11-16
 
 Fix release for 0.10.0-beta.2.

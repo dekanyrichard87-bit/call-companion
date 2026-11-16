@@ -350,6 +350,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
 QToolTip {{ background: {p.tip_bg}; color: {p.tip_text}; border: none; padding: 4px 8px; border-radius: 6px; }}
 {_tones(p)}
+{qss_panel(p)}
 """
 
 
@@ -379,13 +380,60 @@ QMenu::separator {{ height: 1px; background: {p.surface2}; margin: 4px 8px; }}
 """
 
 
-def qss_card(p: Palette | None = None) -> str:
-    """Call card (overlay.CallOverlay). The card's own background, border and glow are painted (paintEvent)."""
-    p = p or _T.pal
+def _card_buttons(p: Palette, scope: str = "") -> str:
+    """Button rules of the call card; `scope` = "QFrame#callPanel " for the same buttons in the main window's call
+    panel (v0.10.0-beta.3)."""
     b = (255, 255, 255) if not p.light else (76, 79, 105)
     btn = f"rgba({b[0]},{b[1]},{b[2]},{p.card_btn})"
     btn_h = f"rgba({b[0]},{b[1]},{b[2]},{p.card_btn_hover})"
-    light = p.light
+    light, S = p.light, scope
+    return f"""
+{S}QPushButton {{ background:{btn}; border:none; border-radius:8px; color:{p.text};
+              padding:7px 10px; font-family:'Segoe UI','Segoe UI Emoji'; font-size:12px; }}
+{S}QPushButton:hover {{ background:{btn_h}; }}
+{S}QPushButton:disabled {{ color:{p.disabled}; }}
+{S}QPushButton#done {{ background:{_rgba(p.green, 55 if not light else 34)}; color:{p.green}; }}
+{S}QPushButton#ctl {{ background:{_rgba(p.blue, 34 if not light else 23)}; }}
+{S}QPushButton#ctl:hover {{ background:{_rgba(p.blue, 70 if not light else 46)}; }}
+{S}QPushButton#ctl:checked {{ background:{_rgba(p.peach, 60 if not light else 36)}; color:{p.peach}; }}
+{S}QPushButton#answer {{ background:{_rgba(p.green, 48 if not light else 31)}; color:{p.green}; font-weight:600; }}
+{S}QPushButton#answer:hover {{ background:{_rgba(p.green, 95 if not light else 60)}; }}
+{S}QPushButton#reject {{ background:{_rgba(p.red, 40 if not light else 26)}; color:{p.red}; font-weight:600; }}
+{S}QPushButton#reject:hover {{ background:{_rgba(p.red, 90 if not light else 52)}; }}
+{S}QPushButton#ext {{ background:{_rgba(p.mauve, 26 if not light else 20)}; text-align:left; padding:6px 9px;
+                  font-size:12px; }}
+{S}QPushButton#ext:hover {{ background:{_rgba(p.mauve, 70 if not light else 46)}; }}
+{S}QPushButton#callback {{ background:{p.green}; color:{p.on_accent}; font-weight:600; min-height:18px; }}
+{S}QPushButton#callback:hover {{ background:{p.green_hover}; }}
+{S}QPushButton#callback:disabled {{ background:{_rgba(p.green, 70)}; color:{p.on_accent}; }}
+{S}QPushButton#close {{ background:transparent; font-size:14px; padding:2px 6px; }}
+{S}QPushButton#close:hover {{ background:{_rgba(p.red, 60 if not light else 40)}; }}
+"""
+
+
+def qss_panel(p: Palette | None = None) -> str:
+    """v0.10.0-beta.3 call panel inside the main window (call_panel.CallPanel): labels + the card's buttons.
+    Its background, border and accent bar are painted (paintEvent)."""
+    p = p or _T.pal
+    return _card_buttons(p, "QFrame#callPanel ") + f"""
+QFrame#callPanel QLabel {{ background: transparent; }}
+QLabel#pStatus {{ font-size: 11px; font-weight: 700; letter-spacing: 1px; }}
+QLabel#pWhy {{ font-size: 11px; color: {p.dim}; }}
+QLabel#pTimer {{ font-size: 13px; font-weight: 600; color: {p.blue}; }}
+QLabel#pName {{ font-size: 20px; font-weight: 700; color: {p.text}; }}
+QLabel#pTag {{ background: {_rgba(p.lavender, 38 if not p.light else 26)}; color: {p.lavender}; font-size: 12px;
+              font-weight: 600; padding: 1px 8px; border-radius: 9px; }}
+QLabel#pNumber {{ font-size: 12px; color: {p.dim}; }}
+QLabel#pHint {{ font-size: 11px; color: {p.red}; }}
+{_tones(p, "QLabel#pStatus")}
+{_tones(p, "QLabel#pTimer")}
+{_tones(p, "QLabel#pHint")}
+"""
+
+
+def qss_card(p: Palette | None = None) -> str:
+    """Call card (overlay.CallOverlay). The card's own background, border and glow are painted (paintEvent)."""
+    p = p or _T.pal
     return f"""
 QLabel {{ color:{p.text}; background:transparent; font-family:'Segoe UI'; }}
 #status {{ font-size:11px; font-weight:700; letter-spacing:1px; }}
@@ -393,29 +441,10 @@ QLabel {{ color:{p.text}; background:transparent; font-family:'Segoe UI'; }}
 #company {{ font-size:15px; font-weight:600; color:{p.subtext1}; }}
 #number {{ font-size:12px; color:{p.dim}; }}
 #timer {{ font-size:13px; font-weight:600; color:{p.blue}; }}
-QPushButton {{ background:{btn}; border:none; border-radius:8px; color:{p.text};
-              padding:7px 10px; font-family:'Segoe UI','Segoe UI Emoji'; font-size:12px; }}
-QPushButton:hover {{ background:{btn_h}; }}
-QPushButton:disabled {{ color:{p.disabled}; }}
-QPushButton#done {{ background:{_rgba(p.green, 55 if not light else 34)}; color:{p.green}; }}
-QPushButton#ctl {{ background:{_rgba(p.blue, 34 if not light else 23)}; }}
-QPushButton#ctl:hover {{ background:{_rgba(p.blue, 70 if not light else 46)}; }}
-QPushButton#ctl:checked {{ background:{_rgba(p.peach, 60 if not light else 36)}; color:{p.peach}; }}
-QPushButton#answer {{ background:{_rgba(p.green, 48 if not light else 31)}; color:{p.green}; font-weight:600; }}
-QPushButton#answer:hover {{ background:{_rgba(p.green, 95 if not light else 60)}; }}
-QPushButton#reject {{ background:{_rgba(p.red, 40 if not light else 26)}; color:{p.red}; font-weight:600; }}
-QPushButton#reject:hover {{ background:{_rgba(p.red, 90 if not light else 52)}; }}
-QPushButton#ext {{ background:{_rgba(p.mauve, 26 if not light else 20)}; text-align:left; padding:6px 9px;
-                  font-size:12px; }}
-QPushButton#ext:hover {{ background:{_rgba(p.mauve, 70 if not light else 46)}; }}
-QPushButton#callback {{ background:{p.green}; color:{p.on_accent}; font-weight:600; min-height:18px; }}
-QPushButton#callback:hover {{ background:{p.green_hover}; }}
-QPushButton#callback:disabled {{ background:{_rgba(p.green, 70)}; color:{p.on_accent}; }}
+{_card_buttons(p)}
 #hint {{ font-size:11px; color:{p.red}; }}
 #empty {{ font-size:11px; color:{p.dim}; }}
 QPushButton#busy {{ color:{p.dim}; }}
-#close {{ background:transparent; font-size:14px; padding:2px 6px; }}
-#close:hover {{ background:{_rgba(p.red, 60 if not light else 40)}; }}
 QToolTip {{ background: {p.tip_bg}; color: {p.tip_text}; border: none; padding: 4px 8px; border-radius: 6px; }}
 {_tones(p)}
 {_tones(p, "#hint")}

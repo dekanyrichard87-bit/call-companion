@@ -7,6 +7,7 @@ hand-edited file and an update never touches either of them.
     {
       "dev_mode": false,
       "theme": "system",                (v0.10.0: dark | light | system)
+      "call_in_window": true,           (v0.10.0-beta.3: a call shows in the active main window)
       "extensions": [ {"number": "102", "name": "Kovács Péter"}, ... ]
     }
 """
@@ -73,6 +74,17 @@ class Settings(QObject):
         if mode in ("dark", "light", "system") and mode != self.theme:
             self._data["theme"] = mode
             log.info("theme setting saved: %s", mode)
+            self._save()
+
+    @property
+    def call_in_window(self) -> bool:
+        """v0.10.0-beta.3: while the main window is the active window a call shows in it instead of the card."""
+        return bool(self._data.get("call_in_window", True))
+
+    def set_call_in_window(self, on: bool) -> None:
+        if bool(on) != self.call_in_window:
+            self._data["call_in_window"] = bool(on)
+            log.info("call in main window: %s", "on" if on else "off")
             self._save()
 
     @property

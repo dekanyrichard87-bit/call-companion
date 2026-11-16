@@ -426,6 +426,7 @@ class CallOverlay(QWidget):
     answer_requested = Signal()              # v0.9.0: ✓ Felvesz on a ringing incoming card
     end_requested = Signal(str)              # v0.9.0: "reject" (ringing) | "hangup" (in call / dialling)
     callback_requested = Signal()            # v0.10.0-beta.2: Visszahívás on a missed-call card
+    changed = Signal()                       # v0.10.0-beta.3: something on the card changed (the call panel mirrors it)
     WIDTH = 340                       # visible card width
     OUTER = WIDTH + 2 * GLOW          # window width (card + glow margin)
     LINGER_DEFAULT_MS = 3000
@@ -457,6 +458,7 @@ class CallOverlay(QWidget):
         self._t0 = time.monotonic()
         self._hover = False
         self._held = False           # v0.8.0: on hold (Bria Desktop API)
+        self._suppressed = False     # v0.10.0-beta.3: the call is shown in the main window's call panel, not here
         self._controls_on = False    # hold / transfer buttons offered (bria_api.enabled)
         self._transfer_on = False    # v0.9.0: transfer offered only when this Bria knows the command
         self._extensions: list = []
@@ -660,12 +662,14 @@ class CallOverlay(QWidget):
         theme.set_tone(self.status, "missed_status" if visual == "missed" else
                        (ENDED_GREY if visual == "ended" else accent))
         self.icon.set_mode(icon_mode or visual, MISSED_BURGUNDY if visual == "missed" else accent)
-        if visual in ("ring", "talk", "hold"):
+        if visual in ("ring", "talk", "hold") and not self._suppressed:
             # ringing: 25 fps for the glow; a live call can last an hour, so its icon runs at 15 fps
+            # (a card shown in the call panel is hidden: the panel animates its own icon)
             self._anim_timer.start(ANIM_MS if visual == "ring" else ANIM_CALL_MS)
         else:
             self._anim_timer.stop()
         self.update()
+        self.changed.emit()
 
     def _animate(self):
         self.icon.update()
@@ -673,12 +677,60 @@ class CallOverlay(QWidget):
             self.update()                     # the glow pulses: repaint the whole card (only while ringing)
 
     def _place(self):
+        if self._suppressed:                  # shown in the main window's call panel: no window, no placement
+            self.changed.emit()
+            return
         self.adjustSize()
         if not any(w is self for w in _STACK):
             _STACK.append(self)
         CallOverlay._relayout(self)
         if _PLACEMENT["mode"] == "auto":
             _ensure_place_timer(_TICK_LIVE_MS)
+        self.changed.emit()
+
+    # ---- v0.10.0-beta.3: call panel in the main window -----------------------------------------------------
+    @property
+    def suppressed(self) -> bool:
+        return self._suppressed
+
+    def suppress(self):
+        """Before show_ringing(): the call is shown in the main window's call panel; this card stays hidden (it keeps
+        the state and does every action, the panel only mirrors it and presses its buttons)."""
+        self._suppressed = True
+
+    def unsuppress(self):
+        """The main window lost the focus (or another call took the panel): show this card at once."""
+        if not self._suppressed:
+            return
+        self._suppressed = False
+        if self._closing or not isValid(self):
+            return
+        self.setWindowOpacity(1.0)
+        self._place()
+        self.show()
+        if self._visual in ("ring", "talk", "hold"):
+            self._anim_timer.start(ANIM_MS if self._visual == "ring" else ANIM_CALL_MS)
+
+    def snapshot(self) -> dict:
+        """What the call panel shows (isHidden: the card window itself may be hidden)."""
+        shown = lambda w: not w.isHidden()          # noqa: E731
+        return {
+            "visual": self._visual, "accent": self._accent, "icon": self.icon._mode, "icon_role": self.icon._role,
+            "status": self.status.text(), "status_tone": self.status.property("tone") or "",
+            "timer": self.lbl_timer.text() if shown(self.lbl_timer) else "",
+            "timer_tone": self.lbl_timer.property("tone") or "",
+            "name": self.lbl_name.text(), "company": self.lbl_company.text() if shown(self.lbl_company) else "",
+            "number": self.lbl_number.text() if shown(self.lbl_number) else "",
+            "ring": shown(self.ring_controls), "answer": shown(self.btn_answer), "reject": self.btn_reject.text(),
+            "controls": shown(self.controls), "hold": self.btn_hold.text(), "held": self._held,
+            "xfer": shown(self.btn_xfer), "callback": shown(self.callback_row),
+            "callback_on": self.btn_callback.isEnabled(), "callback_tip": self.btn_callback.toolTip(),
+            "actions": shown(self.actions), "crm_on": self.btn_crm.isEnabled(), "crm_tip": self.btn_crm.toolTip(),
+            "copy": self.btn_copy.text(), "copy_done": self.btn_copy.objectName() == "done",
+            "busy": not self.btn_hangup.isEnabled() or not self.btn_answer.isEnabled(),
+            "hint": self.lbl_hint.text() if shown(self.lbl_hint) else "", "hint_tone": self.lbl_hint.property("tone") or "",
+            "missed": self._missed, "ended": self._ended, "closing": self._closing,
+        }
 
     @staticmethod
     def _relayout(extra=None):
@@ -789,6 +841,10 @@ class CallOverlay(QWidget):
         self._show_ring_controls()
         self.btn_crm.setEnabled(False)
         self.actions.setVisible(True)
+        if self._suppressed:                    # v0.10.0-beta.3: shown in the main window's call panel
+            self.setWindowOpacity(1.0)
+            self._place()
+            return
         self.setWindowOpacity(0.0)
         self._place()
         self.show()
@@ -843,6 +899,8 @@ class CallOverlay(QWidget):
         text = format_duration(time.monotonic() - self._answered_at)
         if text != self.lbl_timer.text():
             self.lbl_timer.setText(text)
+            if self._suppressed:
+                self.changed.emit()
 
     def elapsed_s(self) -> int:
         """Seconds since the call was answered (0 when it was not)."""
@@ -981,6 +1039,7 @@ class CallOverlay(QWidget):
         button.setText(text)
         button.setIcon(icons.icon("check", "green"))
         button.setObjectName("done")
+        self.changed.emit()
         button.style().unpolish(button)
         button.style().polish(button)
         token = (button.property("_tok") or 0) + 1
@@ -995,6 +1054,7 @@ class CallOverlay(QWidget):
             button.style().unpolish(button)
             button.style().polish(button)
             self._apply_icons()
+            self.changed.emit()
         QTimer.singleShot(ms, restore)
 
     # ---- v0.8.0: hold / transfer -------------------------------------------------------------------------
@@ -1077,6 +1137,8 @@ class CallOverlay(QWidget):
             self.lbl_hint.setVisible(True)
             self._hint_timer.stop()
             self._place()
+        else:
+            self.changed.emit()
 
     def _request_hold(self, hold: bool):
         if self._closing or self._ended or not self._answered:

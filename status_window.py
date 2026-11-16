@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 
 import icons
 import theme
+from call_panel import CallPanel
 
 log = logging.getLogger("callcompanion.status")
 
@@ -331,6 +332,25 @@ def day_label(d: date, today: date | None = None) -> str:
     return f"{d.year}. {MONTHS_HU[d.month - 1]} {d.day}., {wd}"
 
 
+MONTHS_SHORT_HU = ("jan.", "febr.", "márc.", "ápr.", "máj.", "jún.", "júl.", "aug.", "szept.", "okt.", "nov.",
+                   "dec.")
+
+
+def day_short(d: date, today: date | None = None) -> str:
+    """v0.10.0-beta.3 day under the time of a history row (user request 2026-11-16): "" today, Tegnap, Tegnapelőtt,
+    "nov. 10." this year, "2025. dec. 3." before."""
+    today = today or date.today()
+    if d == today:
+        return ""
+    if d == today - timedelta(days=1):
+        return "Tegnap"
+    if d == today - timedelta(days=2):
+        return "Tegnapelőtt"
+    if d.year == today.year:
+        return f"{MONTHS_SHORT_HU[d.month - 1]} {d.day}."
+    return f"{d.year}. {MONTHS_SHORT_HU[d.month - 1]} {d.day}."
+
+
 def date_range(key: str, today: date | None = None) -> tuple[datetime | None, datetime | None]:
     """[since, until) of a date filter key: any | today | yesterday | week | lastweek (weeks: Monday-Sunday)."""
     today = today or date.today()
@@ -392,7 +412,7 @@ class CallDelegate(QStyledItemDelegate):
     slot keeps its place (no MiniCRM profile, a number that cannot be dialled back). Clicks are handled here
     (editorEvent), so a row needs no widgets and no selection to act."""
     H, HH = 62, 36                    # call row / day header height
-    BTN, BTN_GAP, TIME_W = 32, 2, 40
+    BTN, BTN_GAP, TIME_W = 32, 2, 76     # v0.10.0-beta.3: the column also holds the day (Tegnap, nov. 10.)
     NARROW = 480                      # below this row width the company tag moves to line 2
     action = Signal(object, str)      # CallRecord, "callback" | "crm" | "copy" | "google"
 
@@ -559,8 +579,17 @@ class CallDelegate(QStyledItemDelegate):
         time_left = btn_left - 12 - self.TIME_W
         p.setFont(_font(12))
         p.setPen(QColor(pal.subtext))
-        p.drawText(QRect(time_left, r.top(), self.TIME_W, r.height()),
-                   Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, c.started.strftime("%H:%M"))
+        day = day_short(c.started.date())
+        if day:                     # not today: time on line 1, the day under it (small, muted)
+            p.drawText(QRect(time_left, r.top() + 7, self.TIME_W, 20),
+                       Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, c.started.strftime("%H:%M"))
+            p.setFont(_font(11))
+            p.setPen(QColor(pal.dim))
+            p.drawText(QRect(time_left - 8, r.top() + 31, self.TIME_W + 8, 18),
+                       Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, day)
+        else:
+            p.drawText(QRect(time_left, r.top(), self.TIME_W, r.height()),
+                       Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, c.started.strftime("%H:%M"))
         self._paint_actions(p, r, c, index.row(), hover)
 
         x0 = disc.right() + 12
@@ -750,6 +779,10 @@ class MainWindow(QWidget):
         cl.addWidget(self.gear, 0, Qt.AlignmentFlag.AlignTop)
         root.addWidget(card)
 
+        # ---- v0.10.0-beta.3: call panel (a call shows here instead of the card while this window is active) ----
+        self.panel = CallPanel(self)
+        root.addWidget(self.panel)
+
         # ---- history header: title + type filter, date filter, search ----
         head = QHBoxLayout()
         head.addWidget(self._section("HÍVÁSELŐZMÉNYEK"))
@@ -883,7 +916,28 @@ class MainWindow(QWidget):
         self._summary_timer.start()
         super().showEvent(e)
 
+    # ---- v0.10.0-beta.3: call panel ---------------------------------------------------------------------------
+    def panel_ready(self) -> bool:
+        """The window is the active, visible window: a new call may show in the panel."""
+        return self.isVisible() and self.isActiveWindow() and not self.isMinimized()
+
+    def show_call(self, card) -> None:
+        self.panel.bind(card)
+
+    def _panel_lost(self, why: str) -> None:
+        if self.panel.has_call:
+            self.panel.release(f"window {why}")
+
+    def changeEvent(self, e) -> None:
+        t = e.type()
+        if t == QEvent.Type.ActivationChange and not self.isActiveWindow():
+            self._panel_lost("deactivated")
+        elif t == QEvent.Type.WindowStateChange and self.isMinimized():
+            self._panel_lost("minimised")
+        super().changeEvent(e)
+
     def hideEvent(self, e) -> None:
+        self._panel_lost("hidden")
         self._summary_timer.stop()
         super().hideEvent(e)
 
