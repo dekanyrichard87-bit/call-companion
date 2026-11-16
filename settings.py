@@ -6,6 +6,7 @@ hand-edited file and an update never touches either of them.
 
     {
       "dev_mode": false,
+      "theme": "system",                (v0.10.0: dark | light | system)
       "extensions": [ {"number": "102", "name": "Kovács Péter"}, ... ]
     }
 """
@@ -36,7 +37,7 @@ def clean_extension(number: str, name: str):
 
 
 class Settings(QObject):
-    changed = Signal()          # any value changed (dev mode, extensions)
+    changed = Signal()          # any value changed (dev mode, theme, extensions)
 
     def __init__(self, path: Path | str):
         super().__init__()
@@ -60,6 +61,18 @@ class Settings(QObject):
         if bool(on) != self.dev_mode:
             self._data["dev_mode"] = bool(on)
             log.info("developer mode %s", "ON" if on else "off")
+            self._save()
+
+    @property
+    def theme(self) -> str:
+        """v0.10.0: "dark" | "light" | "system" (default: follow the Windows app theme)."""
+        v = self._data.get("theme")
+        return v if v in ("dark", "light", "system") else "system"
+
+    def set_theme(self, mode: str) -> None:
+        if mode in ("dark", "light", "system") and mode != self.theme:
+            self._data["theme"] = mode
+            log.info("theme setting saved: %s", mode)
             self._save()
 
     @property

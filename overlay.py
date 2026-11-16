@@ -47,47 +47,24 @@ from PySide6.QtWidgets import QApplication, QGridLayout, QHBoxLayout, QLabel, QP
 from shiboken6 import isValid   # ships with PySide6: False once the C++ side of a widget is deleted
 
 import config
+import theme
 from crm import CallerInfo
 
 log = logging.getLogger("overlay")
 
 UNKNOWN_CALLER = "Ismeretlen hívó"
 
-QSS = """
-QLabel { color:#cdd6f4; background:transparent; font-family:'Segoe UI'; }
-#status { font-size:11px; font-weight:700; letter-spacing:1px; }
-#name { font-size:22px; font-weight:700; }
-#company { font-size:15px; font-weight:600; color:#bac2de; }
-#number { font-size:12px; color:#9399b2; }
-#timer { font-size:13px; font-weight:600; color:#89b4fa; }
-QPushButton { background:rgba(255,255,255,20); border:none; border-radius:8px; color:#cdd6f4;
-              padding:7px 10px; font-family:'Segoe UI','Segoe UI Emoji'; font-size:12px; }
-QPushButton:hover { background:rgba(255,255,255,42); }
-QPushButton:disabled { color:#6c7086; }
-QPushButton#done { background:rgba(166,227,161,55); color:#a6e3a1; }
-QPushButton#ctl { background:rgba(137,180,250,34); }
-QPushButton#ctl:hover { background:rgba(137,180,250,70); }
-QPushButton#ctl:checked { background:rgba(250,179,135,60); color:#fab387; }
-QPushButton#answer { background:rgba(166,227,161,48); color:#a6e3a1; font-weight:600; }
-QPushButton#answer:hover { background:rgba(166,227,161,95); }
-QPushButton#reject { background:rgba(243,139,168,40); color:#f38ba8; font-weight:600; }
-QPushButton#reject:hover { background:rgba(243,139,168,90); }
-QPushButton#ext { background:rgba(203,166,247,26); text-align:left; padding:6px 9px; font-size:12px; }
-QPushButton#ext:hover { background:rgba(203,166,247,70); }
-#hint { font-size:11px; color:#f38ba8; }
-#empty { font-size:11px; color:#9399b2; }
-QPushButton#busy { color:#9399b2; }
-#close { background:transparent; font-size:14px; padding:2px 6px; }
-#close:hover { background:rgba(243,139,168,60); }
-"""
+# v0.10.0: the card's style sheet is theme.qss_card() (dark / light, re-applied to open cards on a switch).
 
 
 _STACK: list = []          # every CallOverlay that was placed; pruned when its Qt object is gone
 _SEQ = itertools.count(1)  # creation order, so the newest missed card can sit nearest to the bottom
 GLOW = 6                   # transparent margin around the card for the pulsing glow (px on each side)
 STACK_GAP = 2              # gap between two card windows; the visible gap is STACK_GAP + 2 * GLOW
-INCOMING_GREEN, OUTGOING_MAUVE, ANSWERED_BLUE, MISSED_RED = "#a6e3a1", "#cba6f7", "#89b4fa", "#f38ba8"
-HOLD_PEACH, NOTICE_YELLOW, ENDED_GREY, MISSED_BURGUNDY = "#fab387", "#f9e2af", "#7f849c", "#8c2f45"
+# v0.10.0: state colours are theme ROLES (theme.py), resolved at paint time, so open cards follow a dark / light
+# switch. Dark = the 0.9 colours; light = darker shades (>= 4.5:1 on white). Each state keeps its colour.
+INCOMING_GREEN, OUTGOING_MAUVE, ANSWERED_BLUE, MISSED_RED = "green", "mauve", "blue", "red"
+HOLD_PEACH, NOTICE_YELLOW, ENDED_GREY, MISSED_BURGUNDY = "peach", "yellow", "grey", "burgundy"
 ANIM_MS = 40               # 25 fps, only while a card rings
 ANIM_CALL_MS = 66          # 15 fps for the in-call / hold icon
 
@@ -348,7 +325,8 @@ def format_duration(seconds: int) -> str:
 
 
 def _alpha(color: str, a: int) -> QColor:
-    c = QColor(color)
+    """`color` = a theme role (green, burgundy, ...) or a #hex."""
+    c = QColor(color if color.startswith("#") else theme.color(color))
     c.setAlpha(max(0, min(255, int(a))))
     return c
 
@@ -364,17 +342,18 @@ class StateIcon(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedSize(self.SIZE, self.SIZE)
-        self._mode, self._color, self._t0 = "ring", QColor(INCOMING_GREEN), time.monotonic()
+        self._mode, self._role, self._t0 = "ring", INCOMING_GREEN, time.monotonic()
 
-    def set_mode(self, mode: str, color: str):
-        self._mode, self._color, self._t0 = mode, QColor(color), time.monotonic()
+    def set_mode(self, mode: str, role: str):
+        self._mode, self._role, self._t0 = mode, role, time.monotonic()
         self.update()
 
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         t = time.monotonic() - self._t0
-        c, mode = self._color, self._mode
+        pal = theme.palette()
+        c, mode = QColor(pal[self._role]), self._mode
         cx = cy = self.SIZE / 2
         if mode == "ring":
             p.setBrush(Qt.BrushStyle.NoBrush)
@@ -390,7 +369,7 @@ class StateIcon(QWidget):
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(c)
             p.drawEllipse(QPointF(0, 0), 5.2, 5.2)
-            p.setPen(QPen(QColor(BASE_BG), 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            p.setPen(QPen(QColor(pal.base), 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
             p.drawArc(QRectF(-3, -3, 6, 6), 200 * 16, 140 * 16)  # tiny handset curve
         elif mode == "talk":
             p.setPen(Qt.PenStyle.NoPen)
@@ -409,7 +388,7 @@ class StateIcon(QWidget):
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(_alpha(c.name(), 60 if mode != "missed" else 255))
             p.drawEllipse(QPointF(cx, cy), 9, 9)
-            pen = QPen(QColor("#f5c2cf") if mode == "missed" else c, 1.8, Qt.PenStyle.SolidLine,
+            pen = QPen(QColor(pal.missed_cross) if mode == "missed" else c, 1.8, Qt.PenStyle.SolidLine,
                        Qt.PenCapStyle.RoundCap)
             p.setPen(pen)
             if mode == "missed":
@@ -426,7 +405,16 @@ class StateIcon(QWidget):
         p.end()
 
 
-BASE_BG = "#1e1e2e"
+def _restyle_cards():
+    """v0.10.0 live theme switch: every open card gets the new style sheet and repaints (state colours are roles)."""
+    for w in list(_STACK):
+        if isValid(w):
+            w.setStyleSheet(theme.qss_card())
+            w.icon.update()
+            w.update()
+
+
+theme.changed.connect(_restyle_cards)
 
 
 class CallOverlay(QWidget):
@@ -446,7 +434,7 @@ class CallOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setFixedWidth(self.OUTER)
-        self.setStyleSheet(QSS)
+        self.setStyleSheet(theme.qss_card())
         self._margin, self._fade_ms = margin, answered_fade_ms
         self._linger_ms = max(0, int(end_linger_ms))
         self._number, self._url = "", ""
@@ -597,6 +585,12 @@ class CallOverlay(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         card = QRectF(self.rect()).adjusted(GLOW + 0.5, GLOW + 0.5, -GLOW - 0.5, -GLOW - 0.5)
         v, accent = self._visual, self._accent
+        pal = theme.palette()
+        if pal.light and v != "ring":                            # light: a soft shadow in the glow margin
+            for i in range(GLOW, 0, -1):
+                p.setPen(QPen(QColor(76, 79, 105, int(22 * (1 - i / (GLOW + 1)))), 1.0))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRoundedRect(card.adjusted(-i, -i + 1.5, i, i + 1.5), 16 + i, 16 + i)
         if v == "ring":                                          # pulsing glow (1.2 s period)
             t = time.monotonic() - self._t0
             pulse = 0.5 + 0.5 * math.sin(t * 2 * math.pi / 1.2)
@@ -612,8 +606,8 @@ class CallOverlay(QWidget):
         elif v == "notice":
             border = _alpha(NOTICE_YELLOW, 90)
         else:
-            border = QColor(255, 255, 255, 30)
-        bg = QColor(52, 24, 34, 242) if v == "missed" else QColor(30, 30, 46, 238)   # #1e1e2e / burgundy tint
+            border = QColor(*pal.card_edge)
+        bg = QColor(*(pal.card_missed_bg if v == "missed" else pal.card_bg))     # base glass / burgundy tint
         p.setBrush(bg)
         p.setPen(QPen(border, 1.4))
         p.drawRoundedRect(card, 16, 16)
@@ -627,8 +621,8 @@ class CallOverlay(QWidget):
         self._visual, self._accent = visual, accent
         self._t0 = time.monotonic()
         self.status.setText(text)
-        color = "#f5a3b5" if visual == "missed" else (ENDED_GREY if visual == "ended" else accent)
-        self.status.setStyleSheet(f"color:{color};")
+        theme.set_tone(self.status, "missed_status" if visual == "missed" else
+                       (ENDED_GREY if visual == "ended" else accent))
         self.icon.set_mode(icon_mode or visual, MISSED_BURGUNDY if visual == "missed" else accent)
         if visual in ("ring", "talk", "hold"):
             # ringing: 25 fps for the glow; a live call can last an hour, so its icon runs at 15 fps
@@ -872,7 +866,7 @@ class CallOverlay(QWidget):
         self._tick.stop()
         if self._answered_at is not None:
             self.lbl_timer.setText(format_duration(time.monotonic() - self._answered_at))
-            self.lbl_timer.setStyleSheet(f"color:{ENDED_GREY};")
+            theme.set_tone(self.lbl_timer, ENDED_GREY)
         self._hide_controls()
         self._set_visual("ended", accent, text, icon)
         self._place()
@@ -1037,7 +1031,7 @@ class CallOverlay(QWidget):
             if isinstance(w, QPushButton):
                 w.setEnabled(not on)
         if on and text:
-            self.lbl_hint.setStyleSheet("color:#9399b2;")
+            theme.set_tone(self.lbl_hint, "dim")
             self.lbl_hint.setText(text)
             self.lbl_hint.setVisible(True)
             self._hint_timer.stop()
@@ -1089,7 +1083,7 @@ class CallOverlay(QWidget):
         if self._closing or self._ended:
             return
         self._busy(False)
-        self.lbl_hint.setStyleSheet("")
+        theme.set_tone(self.lbl_hint, None)
         self.lbl_hint.setText("⚠ " + message)
         self.lbl_hint.setVisible(True)
         self._hint_timer.start(7000)
@@ -1100,7 +1094,7 @@ class CallOverlay(QWidget):
         self._busy(False)
         self.finish("ÁTKAPCSOLVA", None, "done", OUTGOING_MAUVE)
         self._hint_timer.stop()
-        self.lbl_hint.setStyleSheet("color:#cba6f7;")
+        theme.set_tone(self.lbl_hint, "mauve")
         self.lbl_hint.setText(f"→ {name} · mellék {number}")
         self.lbl_hint.setVisible(True)
         self._place()

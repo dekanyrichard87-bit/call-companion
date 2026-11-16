@@ -1,9 +1,9 @@
 # Call Companion
 
-**Version 0.9.0-rc.4** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
+**Version 0.10.0-beta.1** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
 
 Call Companion is a small tray application that watches the **Bria Enterprise** softphone and, the moment a
-call rings, shows a dark, frameless pop-up card in the bottom-right corner of the screen (it steps left of Bria's own
+call rings, shows a frameless pop-up card (dark or light, see [Themes](#themes)) in the bottom-right corner of the screen (it steps left of Bria's own
 call notification, Bria's window and other pop-ups, and slides back when they are gone). The card shows the
 caller's number immediately and, a moment later, the caller's **name from MiniCRM** and, a little later still, the
 caller's **company**, with one-click buttons to open the contact in MiniCRM, search the number on Google, or copy it.
@@ -120,9 +120,18 @@ look at the whole stored history, not only the newest 300 calls. Every row has i
 faint at rest, bright when the mouse is over the row; one click, no selection needed (keyboard: Enter = MiniCRM,
 Ctrl+C = copy). The time and the actions keep their place however narrow the window is.
 
+### Themes
+
+**⚙ Beállítások > Megjelenés** (0.10.0): **Sötét**, **Világos** or **Rendszer szerint** (default). One click switches
+at once, without a restart: the main window, the settings, the developer tools, the tray menu and an open call card
+re-style themselves. *Rendszer szerint* follows Windows' app theme (*Settings > Personalisation > Colours > Choose your
+app mode*); the app re-reads it when Windows reports a change and whenever one of its windows opens. The call card
+keeps its state colours in both themes (light mode uses darker shades that read on white). All colours live in
+`theme.py`; the choice is saved in `settings.json` (`"theme"`). Log lines: `theme: ...`.
+
 **Two levels of interface.** Normal mode (default): the tray menu has only *Állapot*, *Híváselőzmények* and *Kilépés*;
 the main window shows one plain state line ("Minden rendben • Aktív", or the problem in plain Hungarian with an error
-code and **📋 Hibajelentés másolása**) and the history. The **⚙** gear (top right) opens **Beállítások**: *Mellékek*,
+code and **📋 Hibajelentés másolása**) and the history. The **⚙** gear (top right) opens **Beállítások**: *Mellékek*, *Megjelenés*,
 *Fejlesztői mód*, *Névjegy* (version, author, update state, *Frissítések keresése*). **Developer mode** (switch in
 Beállítások > Fejlesztői mód)
 adds *Fejlesztői eszközök*: detailed health of every part, MiniCRM re-check, Bria control check, update check, call
@@ -151,9 +160,10 @@ simulator, live `app.log` view and "clear history"; the tray menu gets test call
 | `status_window.py` | `StatusModel` (data, plain-language summary, problem report) and `MainWindow` (normal mode: state line and call history) |
 | `dev_window.py` | `DevWindow`: developer tools (health details, re-checks, simulator, live log) |
 | `history.py` | `HistoryStore`: the persistent call history (SQLite `history.db`) |
-| `settings.py` | `Settings`: values changed inside the app (developer mode, extension list) in `settings.json` |
+| `settings.py` | `Settings`: values changed inside the app (developer mode, theme, extension list) in `settings.json` |
 | `bria_api.py` | `BriaApi`: Bria Desktop API client (local secure WebSocket) for answer, decline / hang up, hold, resume and transfer (only offered when this Bria knows the command) |
-| `settings_dialog.py` | **Beállítások** (⚙): Mellékek, Fejlesztői mód, Névjegy |
+| `settings_dialog.py` | **Beállítások** (⚙): Mellékek, Megjelenés (theme tiles), Fejlesztői mód, Névjegy |
+| `theme.py` | Dark / light palettes, *Rendszer szerint* (Windows app theme), live switching, all style sheets, title bar colour |
 | `extensions_dialog.py` | `ExtensionsEditor`: the colleagues' extensions used by **↪ Átkapcsolás** (read-only list, edit form, inline delete confirmation) |
 | `extension/` | Chrome MV3 extension 0.9.0: `background.js` relays the MiniCRM session cookies and checks every 30 s whether the app restarted, `content.js` pokes the worker so the sync is fast, `popup.html` / `popup.js` = the toolbar popup, `icons/` |
 | `probe.py` | `--probe-bria`: captures what Bria writes during a test call (for adapting the parser) |
@@ -343,6 +353,8 @@ Carried over from earlier releases:
 | Chrome developer-mode extension | The extension is loaded unpacked, so Chrome shows a developer-mode warning at some start-ups | Chrome Web Store publication planned with 1.0.0 (the store zip is built already) |
 | Hungarian-centric number handling | `+36`, `06`, `0036` and PBX-prefixed `000 36...` forms are normalised; other countries are searched as `+<digits>` | - |
 | "Glass" effect is translucent only | No acrylic blur yet | - |
+| **Live follow of Windows' theme is unverified** | *Rendszer szerint* relies on Qt reporting Windows' app-theme change (Qt 6.5+) | The theme is also re-read whenever a window of the app opens; check the `theme: system changed` log line |
+| Chrome extension popup is dark only | The extension did not change in 0.10.0-beta (a change needs a reload on every PC) | Planned with the Web Store extension (1.0.0) |
 | **Installer not yet run on a clean machine** | `build.ps1` / `installer.iss` / `updater.py` were written and their logic unit-tested, but the first real build and the first update cycle happen on the colleague's PC test | Follow [the test plan](#first-test-on-a-colleagues-pc) |
 | **Unsigned exe and installer** | No code-signing certificate. A setup downloaded with a browser gets a SmartScreen *Windows protected your PC* screen; antivirus may look harder at a new PyInstaller exe | *More info > Run anyway* once. Updates downloaded by the app itself carry no download mark, so they do not trigger SmartScreen. Code-signing is on the roadmap |
 | **Update integrity = GitHub account** | The installer is checked against the SHA-256 published in the same release, which catches broken downloads but not a compromised GitHub account | Keep 2FA on the GitHub account; code-signing would add a real publisher check |
@@ -433,16 +445,26 @@ notes from the matching `CHANGELOG.md` section.
 
 Do not delete or re-tag a published release that PCs have already installed; publish a higher version instead.
 
-### Live test of 0.9.0-rc.4 (both PCs)
+### Preview and live test of 0.10.0-beta.1 (themes)
 
-1. `.\build.ps1 -Publish` (release `v0.9.0-rc.4`); update with the tray menu (developer mode) > **Frissítések
-   keresése**. On the colleague's PC wait for the automatic update first (it checks every 6 h; it waits while a call or
-   a missed-call card is on screen).
-2. After the update the main window shows **EXT-OLD** (the old 0.4.0 extension is still loaded): `chrome://extensions`
-   > Call Companion > ↻. The message goes away, `app.log` shows `extension version 0.9.0`.
-3. Pin the extension (puzzle icon > 📌): popup with *Kapcsolódva ✓*, MiniCRM, last sync, **Szinkron most** (green ✓).
-4. Quit Call Companion from the tray: within 30 s the icon gets a red `!`, the popup says *A Call Companion nem fut*.
-   Start it again: within 30 s `app.log` shows `extension push (restart)` and the names work - no reload needed.
+Before publishing, from the repository (no Bria needed):
+
+1. `.venv\Scripts\python status_window.py` (main window with sample data) > **⚙** > **Megjelenés**: click
+   *Sötét*, *Világos*, *Rendszer szerint*; the main window and the settings switch at once. Check in light mode:
+   status card, filters, search box, rows (white, missed rows pink with the burgundy bar), company tag, day headers,
+   tooltips; *Mellékek* (list, form, delete confirmation) and the title bars.
+2. `.venv\Scripts\python main.py --simulate +36301234567`: the card in both themes (ringing green glow, in call
+   blue); switch the theme while the card is open (⚙ in the main window). Developer tools > simulator for the missed,
+   hold, notice and ended states.
+
+After `.\build.ps1 -Publish` (release `v0.10.0-beta.1`):
+
+1. After the update (the default is *Rendszer szerint*) the app has the Windows app theme; `app.log`: `theme: start,
+   mode system -> dark|light`.
+2. A real incoming call in **Világos**: the card is readable, the buttons work.
+3. *Rendszer szerint*: switch Windows' app mode (Settings > Personalisation > Colours): the app follows
+   (`theme: system changed -> ...`); if not, it follows the next time a window of the app opens.
+4. Restart the app: the chosen theme stays. The colleague's PC updates by itself.
 
 ---
 
@@ -652,7 +674,7 @@ set), `log_globs` (see above), `log_globs_fallback` (see above), `incoming_regex
 | `verify_tls` | `false` | Check Bria's certificate (local connection; Bria's embedded certificate may be expired) |
 
 **Files written by the app** (not hand-edited): `%LOCALAPPDATA%\CallCompanion\settings.json` (developer mode,
-extension list) and `history.db` (call history).
+theme, extension list) and `history.db` (call history).
 
 Example, in `%LOCALAPPDATA%\CallCompanion\config.json` (kept by updates; restart the app after editing):
 
@@ -709,6 +731,7 @@ Everything is logged to `%LOCALAPPDATA%\CallCompanion\app.log` (cookies and resp
 | `recheck: requested (extension=...)` then `recheck: done minicrm=... extension=...` | The re-check button was pressed and finished |
 | `recheck: no result after 8 s` | The session check did not answer in time |
 | `developer mode ON` / `off`, `extension list saved: N entries` | Settings changed in the app |
+| `theme: start, mode system -> dark`, `theme: mode set to light`, `theme: system changed -> light` | Theme at start, a choice on the Megjelenés page, Windows' app theme changed (in *Rendszer szerint*) |
 | `history: pruned N old + M over-limit row(s)` | Old calls removed at start (`history` block) |
 | `bria action hold\|transfer for call ...` then `bria api: N call(s) in Bria, match for ...1234 -> <id>` | A card button was pressed; Bria listed its calls and the matching one was found |
 | `bria api: holdCall\|resumeCall <id> -> 200`, `bria api: transferCall <id> -> 102: 200` | Bria accepted the action |
@@ -787,7 +810,10 @@ and one-click transfer through the Bria Desktop API, extension list.
   Névjegy; done, verified live); **rc.4** Chrome extension 0.9.0 (restart check every 30 s, toolbar icon + status
   popup, version handshake `EXT-OLD`, store package). Transfer UI only once the provider
   enables the command.
-- **1.0.0** = 0.9.0-rc after a week without new issues, with the new logo; the Chrome extension is published on the
+- **0.10.0-beta** (UI/UX revision, design approved 2026-11-13): **beta.1** theme system with dark / light /
+  system mode (this release); **beta.2** drawn icons, history row buttons, *Visszahívás*; **beta.3** call panel inside
+  the active main window. Then **1.0.0-rc**.
+- **1.0.0** = 1.0.0-rc after a week without new issues, with the new logo; the Chrome extension is published on the
   Chrome Web Store then; the extension list and history format are frozen.
 
 Also open (any time before or after 1.0):
@@ -811,7 +837,7 @@ calls, acrylic blur, Chrome Web Store (unlisted) publication of the extension.
 ```
 callcompanion/
   main.py  detectors.py  events.py  local_api.py  crm.py  overlay.py  status_window.py  dev_window.py
-  history.py  settings.py  settings_dialog.py  bria_api.py  extensions_dialog.py  probe.py  updater.py
+  history.py  settings.py  settings_dialog.py  theme.py  bria_api.py  extensions_dialog.py  probe.py  updater.py
   config.py  config.json  version.py  requirements.txt
   extension/            manifest.json  background.js  content.js
   assets/               app.ico

@@ -3,6 +3,40 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [0.10.0-beta.1] - 2026-11-16
+
+UI/UX revision, part 1 of 3 (0.10.0-beta): theme system with dark and light mode, as drawn on the approved design
+canvas (2026-11-13). Next: beta.2 = drawn icons, history row buttons, Visszahívás; beta.3 = call panel in the main
+window.
+
+### Added
+- **Theme system** (`theme.py`, new): every colour of the app comes from one palette per theme: main window, call
+  history, settings, extension editor, developer tools, tray menu and the call card. Colours are addressed by role
+  (text, subtext, green, blue, ...), so painted parts (history rows, day headers, card glow, state icons) follow a
+  switch by themselves; widgets with a state colour use a `tone` property.
+- **Világos (light) theme**: Catppuccin Latte base (#eff1f5), white rows and cards with a thin border, darker state
+  colours that read at >= 4.5:1 on white (green #2e7d1f, blue #1e66f5, mauve #8839ef, amber #c2410c, red #d20f39,
+  yellow #a15c07, burgundy #b4294a, company tag #4f5fd8), missed rows #fcf0f3. The call card keeps its per-state
+  colouring (ringing green / outgoing mauve glow, in call blue, on hold amber, missed burgundy, ended grey, notice
+  yellow); in light mode it is white glass with a soft shadow.
+- **⚙ Beállítások > Megjelenés** (new page: Mellékek | Megjelenés | Fejlesztői mód | Névjegy): three tiles
+  **Sötét / Világos / Rendszer szerint** with a painted preview. One click switches **at once, without a restart**:
+  every open window and an open call card re-style themselves. Saved in `settings.json` (`"theme"`).
+- **Rendszer szerint** follows the Windows app theme (`HKCU\...\Themes\Personalize` `AppsUseLightTheme`): Qt's
+  colour-scheme signal triggers a re-read, and the value is also re-read whenever one of the app's windows opens.
+  *Unverified*: whether Qt reports the change while the app runs; log line `theme: system changed -> light`.
+- The Windows **title bar** of the main window, the settings and the developer tools follows the theme
+  (`DwmSetWindowAttribute`; if Windows refuses, logged once as `theme: title bar colour ...`).
+- Log lines `theme: start, mode system -> dark`, `theme: mode set to light`, `theme setting saved: light`.
+
+### Changed
+- **Default theme = Rendszer szerint** (user decision 2026-11-16): after this update a PC whose Windows apps are set
+  to light gets the light theme; choose *Sötét* to keep the 0.9 look.
+- Tooltips, scroll bars and the tray menu are styled from the theme (they used Windows' default look).
+- `status_window.py` no longer exports colour constants or `QSS`; the style sheets are built by `theme.qss_main()`,
+  `qss_dev()`, `qss_menu()`, `qss_card()`. `overlay.py` state colours are role names.
+- The settings dialog is deleted when closed (no hidden copies left behind).
+
 ## [0.9.0-rc.4] - 2026-11-13
 
 Release candidate, part 4 of 4: Chrome extension 0.9.0. **Reload the extension once after this update**

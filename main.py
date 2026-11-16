@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from shiboken6 import isValid   # ships with PySide6: False once the C++ side of a widget is deleted
 
 import config
+import theme
 import updater
 from bria_api import BriaApi, BriaApiError
 from crm import CallerInfo, MiniCrmClient
@@ -686,6 +687,7 @@ def main():
     store = HistoryStore(config.data_dir() / "history.db", hist_cfg.get("retention_days", 90),
                          hist_cfg.get("max_rows", 2000))
     settings = Settings(config.data_dir() / "settings.json")
+    theme.init(app, settings.theme)       # v0.10.0: dark / light / system, before any window is built
     ctl = Controller(cfg, store, settings)
     data_dir = str(config.data_dir())
     win = MainWindow(ctl.status, __version__, settings.dev_mode, data_dir)
@@ -710,6 +712,8 @@ def main():
     tray.setToolTip("Call Companion")
     menu = QMenu()
     menu.setToolTipsVisible(True)
+    menu.setStyleSheet(theme.qss_menu())                 # v0.10.0: same entries, theme colours
+    theme.changed.connect(lambda: menu.setStyleSheet(theme.qss_menu()))
 
     def build_menu():
         """Normal mode: Status, Call history, Quit. Developer mode adds the technical entries."""

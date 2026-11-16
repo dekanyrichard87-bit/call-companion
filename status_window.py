@@ -22,23 +22,21 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from enum import Enum
 
-from PySide6.QtCore import QEvent, QObject, QRect, QSize, QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QRect, QRectF, QSize, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import (QColor, QCursor, QDesktopServices, QFont, QFontMetrics, QGuiApplication, QKeySequence,
-                           QPainter, QShortcut)
+                           QPainter, QPen, QShortcut)
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QPushButton, QStyle, QStyledItemDelegate, QSystemTrayIcon, QToolTip, QVBoxLayout,
     QWidget,
 )
 
+import theme
+
 log = logging.getLogger("callcompanion.status")
 
-# ----------------------------------------------------------------- palette --
-BASE, MANTLE, SURFACE, SURFACE2, OVERLAY = "#1e1e2e", "#181825", "#313244", "#45475a", "#585b70"
-TEXT, SUBTEXT = "#cdd6f4", "#a6adc8"
-GREEN, YELLOW, RED, BLUE, MAUVE, LAVENDER, PEACH = (
-    "#a6e3a1", "#f9e2af", "#f38ba8", "#89b4fa", "#cba6f7", "#b4befe", "#fab387")
-BURGUNDY = "#8c2f45"          # missed calls: deep, quiet red
+# v0.10.0: no colour constants any more. Colours are theme ROLES (theme.py), resolved at paint / style time, so a
+# dark / light switch repaints everything without a restart.
 
 
 # ------------------------------------------------------------------- model --
@@ -49,13 +47,13 @@ class Health(Enum):
     UNKNOWN = "unknown"
 
 
-HEALTH_COLOR = {Health.OK: GREEN, Health.WARN: YELLOW, Health.ERROR: RED, Health.UNKNOWN: SUBTEXT}
+HEALTH_COLOR = {Health.OK: "green", Health.WARN: "yellow", Health.ERROR: "red", Health.UNKNOWN: "subtext"}  # roles
 
 STATUS_HU = {"ringing": "Csörög", "answered": "Folyamatban", "hold": "Tartva", "ended": "Befejezve",
              "missed": "Nem fogadott", "rejected": "Elutasítva", "unanswered": "Nem vették fel",
              "elsewhere": "Máshol fogadták", "transferred": "Átkapcsolva"}
-STATUS_COLOR = {"ringing": GREEN, "answered": BLUE, "hold": PEACH, "ended": SUBTEXT, "missed": RED,
-                "rejected": YELLOW, "unanswered": SUBTEXT, "elsewhere": SUBTEXT, "transferred": MAUVE}
+STATUS_COLOR = {"ringing": "green", "answered": "blue", "hold": "peach", "ended": "subtext", "missed": "red",
+                "rejected": "yellow", "unanswered": "subtext", "elsewhere": "subtext", "transferred": "mauve"}
 
 
 @dataclass
@@ -344,14 +342,14 @@ def date_range(key: str, today: date | None = None) -> tuple[datetime | None, da
 
 
 def caller_title(c: CallRecord) -> tuple[str, str]:
-    """(text, color) of the first line."""
+    """(text, colour role) of the first line."""
     if c.name:
-        return c.name, TEXT
+        return c.name, "text"
     if c.lookup == "pending":
-        return c.number or "Ismeretlen szám", TEXT
+        return c.number or "Ismeretlen szám", "text"
     if c.lookup == "failed":
-        return c.number or "Ismeretlen szám", YELLOW
-    return "Ismeretlen hívó", SUBTEXT
+        return c.number or "Ismeretlen szám", "yellow"
+    return "Ismeretlen hívó", "subtext"
 
 
 def _font(px: int, weight=QFont.Weight.Normal, emoji: bool = False) -> QFont:
@@ -461,21 +459,22 @@ class CallDelegate(QStyledItemDelegate):
         p.save()
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = option.rect.adjusted(4, 8, -4, -2)
+        pal = theme.palette()
         if option.state & QStyle.StateFlag.State_MouseOver:
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(SURFACE))
+            p.setBrush(QColor(pal.row_hover if pal.light else pal.surface))
             p.drawRoundedRect(r, 8, 8)
         x = r.left() + 8
         p.setFont(_font(12, QFont.Weight.DemiBold))
-        p.setPen(QColor(SUBTEXT))
+        p.setPen(QColor(pal.subtext))
         p.drawText(QRect(x, r.top(), 14, r.height()), Qt.AlignmentFlag.AlignCenter, "▾" if h.expanded else "▸")
         x += 18
-        parts = [(h.label, TEXT, True), (f"{h.count} hívás", SUBTEXT, False)]
+        parts = [(h.label, pal.text, True), (f"{h.count} hívás", pal.subtext, False)]
         if h.missed:
-            parts.append((f"{h.missed} nem fogadott", "#e0607e", False))
+            parts.append((f"{h.missed} nem fogadott", pal.missed_text, False))
         for i, (txt, col, bold) in enumerate(parts):
             if i:
-                p.setPen(QColor(OVERLAY))
+                p.setPen(QColor(pal.overlay))
                 p.setFont(_font(12))
                 p.drawText(QRect(x, r.top(), 16, r.height()), Qt.AlignmentFlag.AlignCenter, "·")
                 x += 16
@@ -495,21 +494,28 @@ class CallDelegate(QStyledItemDelegate):
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         hover = bool(option.state & QStyle.StateFlag.State_MouseOver)
         missed = c.status == "missed"
-        bg = QColor(SURFACE2 if selected else ("#3a3b4f" if hover else SURFACE))
+        pal = theme.palette()
+        bg = QColor(pal.row_sel if selected else (pal.row_hover if hover else pal.row))
         if missed and not selected:
-            bg = QColor("#3a2733" if hover else "#33232d")     # quiet burgundy tint
+            bg = QColor(pal.row_missed_hover if hover else pal.row_missed)     # quiet burgundy tint
+        if pal.edge != "transparent":                                     # light: white rows with a thin border
+            p.setPen(QPen(QColor(pal.edge), 1))
+            p.setBrush(bg)
+            p.drawRoundedRect(QRectF(r).adjusted(0.5, 0.5, -0.5, -0.5), 10, 10)
+        else:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(bg)
+            p.drawRoundedRect(r, 10, 10)
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(bg)
-        p.drawRoundedRect(r, 10, 10)
         if missed:
-            p.setBrush(QColor(BURGUNDY))
+            p.setBrush(QColor(pal.burgundy))
             p.drawRoundedRect(QRect(r.left(), r.top() + 8, 4, r.height() - 16), 2, 2)
 
         # status disc with the direction arrow
-        col = QColor(STATUS_COLOR.get(c.status, TEXT))
+        col = QColor(pal[STATUS_COLOR.get(c.status, "text")])
         disc = QRect(r.left() + 14, r.center().y() - 15, 30, 30)
         fill = QColor(col)
-        fill.setAlpha(45)
+        fill.setAlpha(45 if not pal.light else 40)
         p.setBrush(fill)
         p.drawEllipse(disc)
         p.setPen(col)
@@ -521,7 +527,7 @@ class CallDelegate(QStyledItemDelegate):
         col_w = self._right_col_w()
         col_left = r.right() - 10 - col_w
         p.setFont(_font(12))
-        p.setPen(QColor(SUBTEXT))
+        p.setPen(QColor(pal.subtext))
         p.drawText(QRect(col_left, r.top() + 9, col_w, 20), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                    c.started.strftime("%H:%M"))
         self._paint_actions(p, r, c, index.row(), hover)
@@ -545,7 +551,7 @@ class CallDelegate(QStyledItemDelegate):
                 tag_w = min(natural, 56) if avail - 64 >= 90 else 0
         name_txt = nfm.elidedText(title, Qt.TextElideMode.ElideRight, max(30, avail - (tag_w + 8 if tag_w else 0)))
         p.setFont(nf)
-        p.setPen(QColor(tcolor))
+        p.setPen(QColor(pal[tcolor]))
         y1 = r.top() + 9
         p.drawText(QRect(x0, y1, avail, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name_txt)
         if tag_w:
@@ -560,16 +566,16 @@ class CallDelegate(QStyledItemDelegate):
                 x += tw + 8
         parts = []
         if c.name or c.lookup not in ("pending", "failed"):
-            parts.append((c.number, SUBTEXT))
+            parts.append((c.number, "subtext"))
         elif c.lookup == "failed":
-            parts.append(("Keresés sikertelen", YELLOW))
+            parts.append(("Keresés sikertelen", "yellow"))
         else:
-            parts.append(("Keresés…", SUBTEXT))
-        parts.append((STATUS_HU.get(c.status, c.status), STATUS_COLOR.get(c.status, SUBTEXT)))
+            parts.append(("Keresés…", "subtext"))
+        parts.append((STATUS_HU.get(c.status, c.status), STATUS_COLOR.get(c.status, "subtext")))
         if c.duration_s:
-            parts.append((_fmt_duration(c.duration_s), SUBTEXT))
+            parts.append((_fmt_duration(c.duration_s), "subtext"))
         if c.note:
-            parts.append((c.note, MAUVE))
+            parts.append((c.note, "mauve"))
         sf = _font(12)
         sfm = QFontMetrics(sf)
         p.setFont(sf)
@@ -577,14 +583,14 @@ class CallDelegate(QStyledItemDelegate):
             if i:
                 if right - x < 34:
                     break
-                p.setPen(QColor(OVERLAY))
+                p.setPen(QColor(pal.overlay))
                 p.drawText(QRect(x, y2, 14, 18), Qt.AlignmentFlag.AlignCenter, "·")
                 x += 14
             room = right - x
             if room < 20:
                 break
             t = sfm.elidedText(txt, Qt.TextElideMode.ElideRight, room)
-            p.setPen(QColor(colr))
+            p.setPen(QColor(pal[colr]))
             p.drawText(QRect(x, y2, room, 18), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, t)
             x += sfm.horizontalAdvance(t)
         p.restore()
@@ -593,72 +599,46 @@ class CallDelegate(QStyledItemDelegate):
     def _paint_tag(p: QPainter, tag: QRect, company: str, cf: QFont, cfm: QFontMetrics):
         if tag.width() <= 24:
             return
-        tbg = QColor(LAVENDER)
-        tbg.setAlpha(38)
+        tbg = theme.qcolor("lavender", 38 if not theme.palette().light else 26)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(tbg)
         p.drawRoundedRect(tag, 9, 9)
         p.setFont(cf)
-        p.setPen(QColor(LAVENDER))
+        p.setPen(theme.qcolor("lavender"))
         p.drawText(tag.adjusted(8, 0, -8, 0), Qt.AlignmentFlag.AlignVCenter,
                    cfm.elidedText(company, Qt.TextElideMode.ElideRight, tag.width() - 16))
 
     def _paint_actions(self, p: QPainter, r: QRect, c: CallRecord, row: int, row_hover: bool):
         hovered = self.hover[1] if self.hover and self.hover[0] == row else None
         copied = self.copied.get(c.call_id, 0) > time.monotonic()
+        pal = theme.palette()
         for kind, q in self.action_rects(r, c).items():
             glyph = next(g for k, g, _t in ACTIONS if k == kind)
             if kind == "copy" and copied:
                 p.setOpacity(1.0)
                 p.setPen(Qt.PenStyle.NoPen)
-                ok = QColor(GREEN)
-                ok.setAlpha(50)
+                ok = QColor(pal.green)
+                ok.setAlpha(50 if not pal.light else 34)
                 p.setBrush(ok)
                 p.drawRoundedRect(q, 7, 7)
                 p.setFont(_font(13, QFont.Weight.Bold))
-                p.setPen(QColor(GREEN))
+                p.setPen(QColor(pal.green))
                 p.drawText(q, Qt.AlignmentFlag.AlignCenter, "✓")
                 continue
             if kind == hovered:
                 p.setOpacity(1.0)
                 p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(QColor(255, 255, 255, 34))
+                p.setBrush(QColor(*pal.hover_rgba))
                 p.drawRoundedRect(q, 7, 7)
             p.setOpacity(1.0 if kind == hovered else (0.85 if row_hover else 0.35))
             p.setFont(_font(12, emoji=True))
-            p.setPen(QColor(TEXT))
+            p.setPen(QColor(pal.text))
             p.drawText(q, Qt.AlignmentFlag.AlignCenter, glyph)
         p.setOpacity(1.0)
 
 
 # ------------------------------------------------------------------ window --
-QSS = f"""
-QWidget {{ background: {BASE}; color: {TEXT}; font-family: "Segoe UI"; font-size: 13px; }}
-QLabel {{ background: transparent; }}
-QFrame#statusCard {{ background: {SURFACE}; border-radius: 14px; }}
-QLabel#statusTitle {{ font-size: 18px; font-weight: 700; }}
-QLabel#statusHint {{ color: {SUBTEXT}; font-size: 12px; }}
-QLabel#code {{ color: {SUBTEXT}; font-size: 11px; font-family: Consolas, "Segoe UI"; }}
-QLabel#section {{ color: {SUBTEXT}; font-size: 11px; font-weight: 600; letter-spacing: 1px; }}
-QLabel#version {{ color: {OVERLAY}; font-size: 11px; }}
-QListWidget {{ background: transparent; border: none; outline: none; }}
-QListWidget::item {{ background: transparent; border: none; }}
-QLineEdit {{ background: {MANTLE}; border: 1px solid {SURFACE2}; border-radius: 8px; padding: 6px 10px; }}
-QLineEdit:focus {{ border-color: {BLUE}; }}
-QPushButton {{ background: {SURFACE2}; border: none; border-radius: 8px; padding: 7px 14px;
-              font-family: "Segoe UI", "Segoe UI Emoji"; }}
-QPushButton:hover {{ background: {OVERLAY}; }}
-QPushButton:disabled {{ color: {OVERLAY}; background: {SURFACE}; }}
-QPushButton#seg {{ background: transparent; color: {SUBTEXT}; padding: 5px 12px; border-radius: 13px; }}
-QPushButton#seg:hover {{ background: {SURFACE}; color: {TEXT}; }}
-QPushButton#seg:checked {{ background: {SURFACE2}; color: {TEXT}; font-weight: 600; }}
-QPushButton#gear {{ background: transparent; color: {SUBTEXT}; font-size: 18px; padding: 2px 8px; border-radius: 8px; }}
-QPushButton#gear:hover {{ background: {SURFACE2}; color: {TEXT}; }}
-QPushButton#done {{ background: #2f4a3a; color: {GREEN}; }}
-QCheckBox {{ color: {SUBTEXT}; spacing: 8px; }}
-QCheckBox::indicator {{ width: 34px; height: 18px; border-radius: 9px; background: {SURFACE2}; }}
-QCheckBox::indicator:checked {{ background: {BLUE}; }}
-"""
+# v0.10.0: the style sheet is built by theme.qss_main() from the current palette (re-applied on a switch).
 
 
 class MainWindow(QWidget):
@@ -685,7 +665,7 @@ class MainWindow(QWidget):
         self.setWindowTitle("Call Companion")
         self.setMinimumSize(420, 560)
         self.resize(600, 680)
-        self.setStyleSheet(QSS)
+        self.setStyleSheet(theme.qss_main())
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 16, 18, 14)
         root.setSpacing(10)
@@ -753,7 +733,8 @@ class MainWindow(QWidget):
         self.empty = QLabel()
         self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty.setWordWrap(True)
-        self.empty.setStyleSheet(f"color: {SUBTEXT}; padding: 30px;")
+        self.empty.setStyleSheet("padding: 30px;")
+        theme.set_tone(self.empty, "subtext")
         root.addWidget(self.empty, 1)
         for key in ("Return", "Enter"):                    # Enter = MiniCRM, Ctrl+C = copy (keyboard use)
             sc = QShortcut(QKeySequence(key), self.list)
@@ -773,6 +754,7 @@ class MainWindow(QWidget):
         self._summary_timer.setInterval(5000)
         self._summary_timer.timeout.connect(self._refresh_summary)
         model.changed.connect(self._model_changed)
+        theme.changed.connect(self._theme_changed)
         self.refresh()
 
     # ------------------------------------------------------------ helpers --
@@ -861,13 +843,20 @@ class MainWindow(QWidget):
         return False
 
     # ------------------------------------------------------------ refresh --
+    def _theme_changed(self) -> None:
+        """v0.10.0: live dark / light switch: new style sheet, repaint the painted list."""
+        self.setStyleSheet(theme.qss_main())
+        self._refresh_summary()
+        self.list.viewport().update()
+
     def _model_changed(self) -> None:
         if self.isVisible():
             self.refresh()
 
     def _refresh_summary(self) -> None:
         s = self.model.summary()
-        self.dot.setStyleSheet(f"color: {HEALTH_COLOR[s.state]}; font-size: 22px;")
+        self.dot.setStyleSheet("font-size: 22px;")
+        theme.set_tone(self.dot, HEALTH_COLOR[s.state])
         self.st_title.setText(s.title)
         self.st_hint.setText(s.hint)
         self.st_code.setText(f"Hibakód: {s.code}" if s.code else "")
@@ -1044,6 +1033,9 @@ def _demo() -> int:
     Several days of calls (day groups, filters), a narrow-window check, and ⚙ opens the settings dialog."""
     import tempfile
     app = QApplication(sys.argv)
+    from settings import Settings
+    st = Settings(os.path.join(tempfile.mkdtemp(), "settings.json"))     # one per preview run: the theme choice stays
+    theme.init(app, st.theme)
     model = StatusModel()
     model.started -= 60
     for s in ("set_minicrm", "set_bria", "set_extension", "set_api"):
@@ -1069,9 +1061,7 @@ def _demo() -> int:
     win.prepare_quit()
 
     def open_settings():
-        from settings import Settings
         from settings_dialog import SettingsDialog
-        st = Settings(os.path.join(tempfile.mkdtemp(), "settings.json"))
         SettingsDialog(st, "demo", update_state=lambda: "Up to date (demo)", check_updates=lambda: None,
                        set_dev_mode=lambda on: None, parent=win).exec()
     win.open_settings.connect(open_settings)

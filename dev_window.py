@@ -19,8 +19,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from status_window import (BASE, GREEN, HEALTH_COLOR, MANTLE, QSS as MAIN_QSS, RED, SUBTEXT, SURFACE, YELLOW,
-                           Health, StatusModel)
+import theme
+from status_window import HEALTH_COLOR, Health, StatusModel
 
 log = logging.getLogger("callcompanion.dev")
 
@@ -29,15 +29,7 @@ RECHECK_TIMEOUT_MS = 8000
 LOG_TAIL_BYTES = 64 * 1024
 LOG_MAX_LINES = 600
 
-QSS = MAIN_QSS + f"""
-QFrame#card {{ background: {SURFACE}; border-radius: 12px; }}
-QComboBox {{ background: {MANTLE}; border: 1px solid #45475a; border-radius: 8px; padding: 6px 8px; }}
-QComboBox QAbstractItemView {{ background: {SURFACE}; selection-background-color: #45475a; }}
-QPlainTextEdit {{ background: {MANTLE}; border: none; border-radius: 10px; color: #bac2de;
-                 font-family: Consolas, "Cascadia Mono", monospace; font-size: 11px; padding: 6px; }}
-QPushButton#primary {{ background: #89b4fa; color: {BASE}; font-weight: 600; }}
-QPushButton#primary:hover {{ background: #a6c8ff; }}
-"""
+# v0.10.0: style sheet = theme.qss_dev() (main window sheet + combo box, log view), re-applied on a switch.
 
 
 class DevWindow(QWidget):
@@ -60,7 +52,8 @@ class DevWindow(QWidget):
         self.setWindowTitle(f"Call Companion – Fejlesztői eszközök {version}")
         self.setMinimumSize(720, 680)
         self.resize(820, 760)
-        self.setStyleSheet(QSS)
+        self.setStyleSheet(theme.qss_dev())
+        theme.changed.connect(self._theme_changed)
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 16, 18, 16)
         root.setSpacing(10)
@@ -82,7 +75,7 @@ class DevWindow(QWidget):
             name = QLabel(title)
             name.setFixedWidth(170)
             detail = QLabel()
-            detail.setStyleSheet(f"color: {SUBTEXT};")
+            theme.set_tone(detail, "subtext")
             detail.setWordWrap(True)
             detail.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             row.addWidget(dot)
@@ -107,7 +100,8 @@ class DevWindow(QWidget):
         root.addLayout(checks)
         self.recheck_result = QLabel()
         self.recheck_result.setWordWrap(True)
-        self.recheck_result.setStyleSheet(f"color: {SUBTEXT}; font-size: 12px;")
+        self.recheck_result.setStyleSheet("font-size: 12px;")
+        theme.set_tone(self.recheck_result, "subtext")
         root.addWidget(self.recheck_result)
 
         # ---- simulator ----
@@ -128,7 +122,8 @@ class DevWindow(QWidget):
         sim.addWidget(self.sim_button)
         root.addLayout(sim)
         self.sim_result = QLabel()
-        self.sim_result.setStyleSheet(f"color: {SUBTEXT}; font-size: 12px;")
+        self.sim_result.setStyleSheet("font-size: 12px;")
+        theme.set_tone(self.sim_result, "subtext")
         root.addWidget(self.sim_result)
 
         # ---- live log ----
@@ -186,6 +181,9 @@ class DevWindow(QWidget):
         event.ignore()
         self.hide()
 
+    def _theme_changed(self) -> None:
+        self.setStyleSheet(theme.qss_dev())
+
     def showEvent(self, e) -> None:
         self._log_pos = 0
         self.log_view.clear()
@@ -204,11 +202,12 @@ class DevWindow(QWidget):
         m = self.model
         for key, item in (("bria", m.bria), ("minicrm", m.minicrm), ("extension", m.extension),
                           ("api", m.api), ("bria_api", m.bria_api)):
-            self._dots[key].setStyleSheet(f"color: {HEALTH_COLOR[item.state]}; font-size: 14px;")
+            self._dots[key].setStyleSheet("font-size: 14px;")
+            theme.set_tone(self._dots[key], HEALTH_COLOR[item.state])
             self._rows[key].setText(item.text)
 
     def bria_check_result(self, ok: bool, text: str) -> None:
-        self._msg(self.recheck_result, text, GREEN if ok else YELLOW)
+        self._msg(self.recheck_result, text, "green" if ok else "yellow")
 
     # ---- log tail --------------------------------------------------------------------------------------------
     def _tail_log(self) -> None:
@@ -243,15 +242,17 @@ class DevWindow(QWidget):
     def _simulate(self) -> None:
         number = self.sim_number.text().strip()
         if sum(ch.isdigit() for ch in number) < 6:
-            self._msg(self.sim_result, "Adjon meg legalább 6 számjegyű telefonszámot.", RED)
+            self._msg(self.sim_result, "Adjon meg legalább 6 számjegyű telefonszámot.", "red")
             return
         self.simulate_requested.emit(number, self.sim_scenario.currentData())
         self._msg(self.sim_result, f"Szimulált hívás elindítva: {number} ({self.sim_scenario.currentText()}).",
-                  GREEN)
+                  "green")
 
     @staticmethod
     def _msg(label: QLabel, text: str, color: str) -> None:
-        label.setStyleSheet(f"color: {color}; font-size: 12px;")
+        """`color` is a theme role (green / yellow / red / subtext)."""
+        label.setStyleSheet("font-size: 12px;")
+        theme.set_tone(label, color)
         label.setText(text)
 
     def _clear_history(self) -> None:
@@ -275,9 +276,9 @@ class DevWindow(QWidget):
         log.info("recheck: requested (extension=%s)", ext.value)
         if ext in (Health.UNKNOWN, Health.WARN):
             self._msg(self.recheck_result, "Nincs aktív Chrome bővítmény – nyissa meg a Chrome-ot a "
-                                           "bejelentkezett MiniCRM-mel, majd próbálja újra.", YELLOW)
+                                           "bejelentkezett MiniCRM-mel, majd próbálja újra.", "yellow")
         else:
-            self._msg(self.recheck_result, "Ellenőrzés folyamatban…", SUBTEXT)
+            self._msg(self.recheck_result, "Ellenőrzés folyamatban…", "subtext")
         self.recheck_requested.emit()
         QTimer.singleShot(RECHECK_TIMEOUT_MS, lambda: self._recheck_timeout(token))
 
@@ -303,7 +304,7 @@ class DevWindow(QWidget):
     def _recheck_timeout(self, token: int) -> None:
         if self._recheck_pending and token == self._recheck_token:
             log.warning("recheck: no result after %d s", RECHECK_TIMEOUT_MS // 1000)
-            self._recheck_finish("Nem érkezett válasz az ellenőrzésre (időtúllépés).", YELLOW)
+            self._recheck_finish("Nem érkezett válasz az ellenőrzésre (időtúllépés).", "yellow")
 
     def _recheck_finish(self, text: str, color: str) -> None:
         self._recheck_pending = False

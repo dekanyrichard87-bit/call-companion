@@ -15,19 +15,9 @@ from PySide6.QtWidgets import (
 )
 
 from settings import MAX_EXTENSIONS, clean_extension
-from status_window import BASE, BLUE, MANTLE, QSS as MAIN_QSS, RED, SUBTEXT, SURFACE, SURFACE2, TEXT
+import theme
 
-QSS = MAIN_QSS + f"""
-QTableWidget {{ background: {SURFACE}; border: none; border-radius: 10px; gridline-color: {SURFACE2};
-               selection-background-color: {SURFACE2}; selection-color: {TEXT}; }}
-QHeaderView::section {{ background: {SURFACE}; color: {SUBTEXT}; border: none; padding: 6px; font-size: 11px; }}
-QPushButton#primary {{ background: {BLUE}; color: {BASE}; font-weight: 600; }}
-QPushButton#primary:hover {{ background: #a6c8ff; }}
-QPushButton#danger {{ background: #5a2a38; color: #f38ba8; font-weight: 600; }}
-QPushButton#danger:hover {{ background: #6e3344; }}
-QFrame#form {{ background: {MANTLE}; border-radius: 10px; }}
-QLabel#err {{ color: {RED}; font-size: 11px; }}
-"""
+# v0.10.0: the table, form, primary / danger buttons are styled by theme.qss_main() (the dialog's style sheet).
 
 
 class ExtensionsEditor(QWidget):
@@ -42,7 +32,8 @@ class ExtensionsEditor(QWidget):
         intro = QLabel("A kollégák belső mellékei. Ha a Bria engedi az átkapcsolást, a hívás kártyáján "
                        "(↪ Átkapcsolás) ezekre lehet egy kattintással átkapcsolni, ebben a sorrendben.")
         intro.setWordWrap(True)
-        intro.setStyleSheet(f"color: {SUBTEXT}; font-size: 12px;")
+        intro.setStyleSheet("font-size: 12px;")
+        theme.set_tone(intro, "subtext")
         root.addWidget(intro)
 
         self.table = QTableWidget(0, 2)
@@ -59,7 +50,8 @@ class ExtensionsEditor(QWidget):
         self.table.itemSelectionChanged.connect(self._sync_buttons)
         root.addWidget(self.table, 1)
         self.empty = QLabel("Még nincs mentett mellék. Adja hozzá az elsőt: + Új mellék")
-        self.empty.setStyleSheet(f"color: {SUBTEXT}; font-size: 12px;")
+        self.empty.setStyleSheet("font-size: 12px;")
+        theme.set_tone(self.empty, "subtext")
         root.addWidget(self.empty)
 
         tools = QHBoxLayout()
