@@ -1,6 +1,6 @@
 # Call Companion
 
-**Version 0.10.0-beta.2** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
+**Version 0.10.0-beta.2.1** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
 
 Call Companion is a small tray application that watches the **Bria Enterprise** softphone and, the moment a
 call rings, shows a frameless pop-up card (dark or light, see [Themes](#themes)) in the bottom-right corner of the screen (it steps left of Bria's own
@@ -368,7 +368,7 @@ Carried over from earlier releases:
 | **Main window position is best effort** | Windows 11 often reports no position for tray icons, so the window goes to the bottom-right of the usable area of the screen under the cursor (or the primary screen) rather than exactly at the icon | - |
 | **Stale-log warning after 30 min** | The Bria health row turns yellow when `Log.txt` has not changed for 30 minutes, which can also happen on a quiet line | Treat it as a hint, not an error |
 | Chrome developer-mode extension | The extension is loaded unpacked, so Chrome shows a developer-mode warning at some start-ups | Chrome Web Store publication planned with 1.0.0 (the store zip is built already) |
-| Hungarian-centric number handling | `+36`, `06`, `0036` and PBX-prefixed `000 36...` forms are normalised; other countries are searched as `+<digits>` | - |
+| Hungarian-centric number handling | `+36`, `06`, `0036`, PBX-prefixed `000 36...` and outside-line `0 06...` (`006...`, 0.10.0-beta.2.1) forms are normalised; other countries are searched as `+<digits>` | - |
 | "Glass" effect is translucent only | No acrylic blur yet | - |
 | **Live follow of Windows' theme is unverified** | *Rendszer szerint* relies on Qt reporting Windows' app-theme change (Qt 6.5+) | The theme is also re-read whenever a window of the app opens; check the `theme: system changed` log line |
 | **Visszahívás number form is unverified** | The +36 numbers of the history are dialled as `06...`; the provider's dial plan was only tested with a typed number | `bria api: call 06...` in `app.log`; if Bria refuses, tell the developer the code |

@@ -3,6 +3,17 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [0.10.0-beta.2.1] - 2026-11-16
+
+Fix release for 0.10.0-beta.2.
+
+### Fixed
+- **Outgoing numbers shown as `+63…`** (seen live with Visszahívás): the provider's dial plan puts the outside-line
+  `0` in front of every number Bria dials, so a call to `06301492629` is logged as `006301492629`, which was read as
+  an international number (`+6301492629`). `006` + 8-9 digits is now read as a national number (`+36301492629`), on
+  the card, in the history and for the MiniCRM lookup. Incoming `00036…` numbers and real international numbers are
+  unchanged. History rows saved with the wrong number before this fix keep it.
+
 ## [0.10.0-beta.2] - 2026-11-16
 
 UI/UX revision, part 2 of 3: drawn icons, the new history row buttons and Visszahívás (call back), as drawn on the

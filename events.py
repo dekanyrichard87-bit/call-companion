@@ -14,13 +14,20 @@ class CallEvent:
 
 
 def normalize_number(raw: str) -> str:
-    """Normalize Hungarian-style numbers to +36...; leave short extensions untouched."""
+    """Normalize Hungarian-style numbers to +36...; leave short extensions untouched.
+    06301234567, 0036301234567, 00036301234567 (PBX prefix), 006301234567 (outside-line 0 + 06...) -> +36301234567"""
     raw = raw or ""
     s = re.sub(r"[^\d+]", "", raw)
     if not re.search(r"\d", s):
         return raw.strip()
     if s.startswith("+"):
         return s
+    if re.fullmatch(r"006\d{8,9}", s):
+        # v0.10.0-beta.2.1: the PBX's outside-line "0" in front of a national 06... number (Bria logs a call dialled as
+        # 06301234567 as 006301234567, seen live 2026-11-16) -> +36... Not an international 006x...: a Hungarian
+        # national number is 06 + 8 or 9 digits, so with the extra 0 it has 11-12 digits (an international number
+        # 00 6x ... is longer, except some New Zealand landlines, accepted)
+        return "+36" + s[3:]
     if s.startswith("00"):
         # international prefix; the PBX may add extra zeros (0036..., 00036...) -> drop all of them
         rest = s.lstrip("0")
