@@ -3,6 +3,40 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [1.0.0-rc.2] - 2026-11-17
+
+Fix release found in live use: the main window said everything was fine while the MiniCRM search already answered
+`403` (log 2026-11-17 08:11: `HTTP 403 POST .../Batch type=text/html 0B` -> `MiniCRM session expired`, then
+`recheck: done minicrm=ok`). The Chrome extension is unchanged (still 1.0.0; no reload, no new store review).
+
+### Added
+- **Újrakeresés a MiniCRM-ben** (`status_window.py`, `main.py`): right click on a history row whose number has no
+  MiniCRM name (*Ismeretlen hívó* or *Keresés sikertelen*) opens a menu with this one item; other rows have no menu.
+  The cached "unknown" is dropped, the number is searched again in the background (the row shows *Keresés…*), and
+  name, profile link and company are saved to the history - for a contact added to MiniCRM after the call. Works for
+  older rows found by the search / date filter too.
+- **Automatic re-lookup**: calls whose lookup failed because the session had expired (or had not arrived yet after
+  start) are looked up again as soon as the session is valid again.
+- **Diagnostics for the 403** (`crm.py`; names only, never values): `session cookies: NAME@domain, ...` whenever the
+  extension's cookie set changes (with `(DUPLICATE: NAME)` when a name is there twice, e.g. on `.minicrm.hu` and
+  `r3.minicrm.hu`), and on every 401/403/login answer `<where> denied: HTTP 403 url=... server=... waf=...
+  set-cookie=... ; jar: ...`.
+
+### Fixed
+- **The MiniCRM session check now runs the same search a call uses** (`POST /<id>/Batch` with the dummy number
+  `000000000`; optional `minicrm.session_probe_term`). Before, it fetched the site root (`session_check_url`), which
+  answered fine while the search was already refused. `session_check_url` is no longer used.
+- **A lookup that hits an expired session re-checks the session at once**: the status line turns red and the
+  *Jelentkezzen be a MiniCRM-be* notice appears (before, only the log knew).
+- **The extension's 5-minute heartbeat re-checks the session** (one small search), so an expired session shows up
+  before the next call even when the cookies did not change.
+- **Developer tools window**: on opening, the health rows could stay at *Ellenőrzés…* until some state changed (the
+  refresh ran while the window was still hidden and was skipped). It now refreshes right after it is shown.
+
+### Not verified
+- Why MiniCRM answered 403 is not known (the server ended the session, two cookies with the same name, or a firewall).
+  The new `denied:` and `session cookies:` log lines are meant to tell; check them at the next occurrence.
+
 ## [1.0.0-rc.1] - 2026-11-16
 
 Release candidate for 1.0.0: the new logo, Chrome extension 1.0.0 for the Chrome Web Store, clean-up. 0.10.0-beta.3

@@ -61,6 +61,8 @@ log = logging.getLogger(__name__)
 DEFAULT_SYSTEM_ID = "60171"
 DEFAULT_SEARCH_TYPE = "Person"
 DEFAULT_MAX_PAGES = 8
+NO_SESSION = "no MiniCRM session yet"           # CallerInfo.error before the extension sent cookies
+SESSION_EXPIRED = "MiniCRM session expired"   # CallerInfo.error of a 401/403/login answer (main.py reacts to it)
 PAGE_GUESS = 20            # a page with at least this many items is assumed to be a full one (MiniCRM: 25)
 
 # item fields that never hold the "name, phone" sub-line of a deal card
@@ -188,6 +190,7 @@ class MiniCrmClient:
                         secure=bool(c.get("secure")),
                     )
                 self._sig = sig
+                log.info("session cookies: %s", self._jar_summary())    # names + domains only, never values
             if user_agent:
                 self.http.headers["User-Agent"] = user_agent
             self.has_session = bool(cookies)
@@ -225,23 +228,67 @@ class MiniCrmClient:
     def _is_login_url(self, url: str) -> bool:
         return self.cfg["login_url_hint"].lower() in urlparse(url).path.lower()
 
+    SESSION_PROBE_TERM = "000000000"    # v1.0.0-rc.2: number used by the session check (normally no match)
+
     def session_ok(self):
-        """True = logged in, False = expired/not logged in, None = could not determine."""
+        """True = logged in, False = expired/not logged in, None = could not determine.
+        v1.0.0-rc.2: runs the same Batch search a call uses (with a dummy number), so "ok" means the call-time
+        lookup works too. Before, GET of the site root answered "ok" while Batch already returned 403."""
         if self.cfg["mock"]:
             return True
         if not self.has_session:
             return False
+        url, t0 = self._batch_url(), time.perf_counter()
+        term = str(self.cfg.get("session_probe_term") or self.SESSION_PROBE_TERM)
         try:
-            r = self.http.get(self.cfg["session_check_url"], timeout=self.cfg["timeout_s"],
-                              allow_redirects=False)
+            r = self.http.post(url, data=self._batch_body(term, 0, self._search_type()),
+                               headers=self._ajax_headers(), timeout=self.cfg["timeout_s"], allow_redirects=True)
         except requests.RequestException as e:
-            log.warning("session check failed: %s", e)
+            log.warning("session check failed: %s", e.__class__.__name__)
             return None
-        if r.status_code in (401, 403):
+        ms = (time.perf_counter() - t0) * 1000
+        if self._is_login_url(r.url) or r.status_code in (401, 403):
+            self.log_denied("session check", r)
             return False
-        if 300 <= r.status_code < 400:
-            return not self._is_login_url(r.headers.get("Location", ""))
-        return r.status_code == 200
+        if r.status_code != 200:
+            log.info("session check: HTTP %s %s (%d ms)", r.status_code, self._summarize(r), ms)
+            return None
+        try:
+            data = r.json()
+        except ValueError:
+            log.info("session check: not JSON %s (%d ms)", self._summarize(r), ms)
+            return None
+        _items, err = self._items_of(data)
+        if err is not None:
+            log.info("session check: %s (%d ms)", err.error, ms)
+            return False if err.error == SESSION_EXPIRED else None
+        self._warm_ok_at = time.monotonic()      # the connection is open and reusable
+        log.debug("session check ok (%d ms)", ms)
+        return True
+
+    def _jar_summary(self) -> str:
+        """"name@domain, ..." of the cookie jar (no values) + the names that appear more than once (the server
+        may then get an old copy). v1.0.0-rc.2 diagnostic for the unexplained 403."""
+        seen, parts = {}, []
+        for c in self.http.cookies:
+            parts.append(f"{c.name}@{c.domain or '?'}")
+            seen[c.name] = seen.get(c.name, 0) + 1
+        dup = sorted(n for n, k in seen.items() if k > 1)
+        return (", ".join(parts) or "none") + (f" (DUPLICATE: {', '.join(dup)})" if dup else "")
+
+    def log_denied(self, where: str, r) -> None:
+        """v1.0.0-rc.2: one diagnostic line for a 401/403/login answer: who answered (Server, a WAF trace such as
+        cf-ray) and which cookie names the server set; plus the names in our jar. No values."""
+        h = r.headers
+        waf = [k for k in ("cf-ray", "x-sucuri-id", "x-iinfo", "x-amz-cf-id", "x-akamai-transformed")
+               if k in h]
+        try:
+            set_names = sorted(r.cookies.keys())
+        except Exception:
+            set_names = []
+        log.info("%s denied: HTTP %s url=%s server=%r waf=%s set-cookie=%s %s; jar: %s", where, r.status_code,
+                 urlparse(r.url).path, h.get("Server", ""), ",".join(waf) or "-", ",".join(set_names) or "-",
+                 self._summarize(r), self._jar_summary())
 
     # ---- connection warm-up ----------------------------------------------------------------
     # A request on a cold connection pays DNS + TCP + TLS (typically 300-500 ms); on an already open
@@ -312,6 +359,10 @@ class MiniCrmClient:
         ttl = self.FOUND_TTL_S if info.found else self.NOT_FOUND_TTL_S
         self._cache[number] = (time.monotonic() + ttl, info)
 
+    def forget(self, number: str) -> None:
+        """v1.0.0-rc.2: drop a cached result (Újrakeresés: the contact may have been added since)."""
+        self._cache.pop(number, None)
+
     # ---- lookup ----------------------------------------------------------------------------
     def lookup(self, number: str) -> CallerInfo:
         t0 = time.perf_counter()
@@ -325,7 +376,7 @@ class MiniCrmClient:
             time.sleep(0.12)
             info = CallerInfo(True, "Teszt Elek", "Példa Kft.", self.cfg["base_url"])
         elif not self.has_session:
-            info = CallerInfo(error="no MiniCRM session yet")
+            info = CallerInfo(error=NO_SESSION)
         else:
             info = self._real_lookup(number)
         info.elapsed_ms = int((time.perf_counter() - t0) * 1000)
@@ -521,7 +572,8 @@ class MiniCrmClient:
                  shown_type, page + 1, r.status_code, r.url, self._summarize(r),
                  (time.perf_counter() - t0) * 1000, f" dump={dump}" if dump else "")
         if self._is_login_url(r.url) or r.status_code in (401, 403):
-            return _Page(stop=CallerInfo(error="MiniCRM session expired"))
+            self.log_denied(f"lookup {tag}", r)
+            return _Page(stop=CallerInfo(error=SESSION_EXPIRED))
         if r.status_code in (400, 404):
             return _Page(problem=f"HTTP {r.status_code} from {url}")
         if r.status_code != 200:
@@ -545,7 +597,7 @@ class MiniCrmClient:
             return None, CallerInfo(error=f"unexpected JSON, keys={keys}")
         status = _ci(node, "Status")
         if status in (401, 403):
-            return None, CallerInfo(error="MiniCRM session expired")
+            return None, CallerInfo(error=SESSION_EXPIRED)
         if status not in (None, 200):
             return None, CallerInfo(error=f"Rpc/List status {status}")
         items = _ci(_ci(node, "Body"), "Items")

@@ -16,7 +16,7 @@ import config
 import theme
 import updater
 from bria_api import BriaApi, BriaApiError
-from crm import CallerInfo, MiniCrmClient
+from crm import NO_SESSION, SESSION_EXPIRED, CallerInfo, MiniCrmClient
 from detectors import BriaLogDetector
 from dev_window import DevWindow
 from settings_dialog import SettingsDialog
@@ -110,6 +110,7 @@ class Controller(QObject):
         self.services = []
         self.ext_seen = False
         self.session_state = None
+        self._expired_ids: list[str] = []          # v1.0.0-rc.2: calls whose lookup hit an expired session
         self.api_service = None
         self.bria_service = None
         self.ext_last = None            # time.time() of the last extension push
@@ -209,7 +210,9 @@ class Controller(QObject):
         changed = self.client.set_extension_session(cookies, ua if isinstance(ua, str) else "")
         log.info("extension push (%s): %d cookies, changed=%s", payload.get("reason"),
                  len(cookies), changed)
-        if changed or self.session_state is None:
+        # v1.0.0-rc.2: the 5-minute heartbeat re-checks too (one small search), so an expired session shows up
+        # before the next call - also when the cookies did not change (the server ended the session).
+        if changed or self.session_state is None or payload.get("reason") == "heartbeat":
             self.check_session()
 
     def ext_status(self) -> dict:
@@ -241,6 +244,8 @@ class Controller(QObject):
             self.status.set_minicrm(Health.WARN, "A munkamenet nem ellenőrizhető (hálózat?)")
         else:
             self.status.set_minicrm(Health.WARN, "Várakozás a Chrome bővítményre")
+        if ok is True and prev is not True and self._expired_ids:
+            self._relookup_expired()
         if ok is False and prev is not False:
             self._show_notice("Jelentkezzen be a MiniCRM-be",
                               "Nyissa meg a Chrome-ot és lépjen be a MiniCRM-be, hogy a hívók neve megjelenjen.")
@@ -554,6 +559,15 @@ class Controller(QObject):
 
     def on_lookup(self, call_id: str, info):
         state = "found" if info.found else ("failed" if info.error else "unknown")
+        if info.error in (SESSION_EXPIRED, NO_SESSION) and not self.mock:
+            # v1.0.0-rc.2: the call is looked up again automatically once the session is valid (again).
+            if call_id not in self._expired_ids:
+                self._expired_ids.append(call_id)
+                del self._expired_ids[:-20]
+            if info.error == SESSION_EXPIRED:
+                # the status line must not stay green after this: re-check now (red + notice if it expired)
+                log.info("lookup for call %s hit an expired session -> session re-check", call_id)
+                self.check_session()
         self.status.call_resolved(call_id, info.name if info.found else None,
                                   info.profile_url or None, state, info.error, info.elapsed_ms)
         if info.found and info.company:
@@ -569,6 +583,29 @@ class Controller(QObject):
                 self.pool.submit(self._company_job, call_id, info)
             except RuntimeError:            # pool already shut down (app is quitting)
                 pass
+
+    # ---- v1.0.0-rc.2: Újrakeresés -----------------------------------------------------------------------
+    def relookup(self, rec, origin: str = "row"):
+        """Look a number up again (right click on an unknown history row, or automatically after the session
+        came back). The cached "unknown" is dropped first; the result goes through on_lookup like a call's."""
+        if rec is None or not dialable(rec.number):
+            return
+        rec = self.status.lookup_restarted(rec)
+        self.client.forget(rec.number)
+        log.info("relookup (%s) for call %s ...%s", origin, rec.call_id,
+                 "".join(ch for ch in rec.number if ch.isdigit())[-4:])
+        try:
+            fut = self.pool.submit(self._safe_lookup, rec.number)
+        except RuntimeError:                 # app is quitting
+            return
+        fut.add_done_callback(lambda f, cid=rec.call_id: self.lookup_sig.emit(cid, f.result()))
+
+    def _relookup_expired(self):
+        ids, self._expired_ids = self._expired_ids, []
+        for cid in ids:
+            rec = self.status._find(cid)
+            if rec is not None and not rec.name:
+                self.relookup(rec, "session back")
 
     def _company_job(self, call_id: str, info):
         try:
@@ -845,6 +882,7 @@ def main():
 
     win.open_settings.connect(open_settings)              # v0.9.0: ⚙ gear in the main window
     win.callback_requested.connect(lambda c: ctl.call_back("row", c.call_id, c.number, c.name or ""))
+    win.relookup_requested.connect(ctl.relookup)          # v1.0.0-rc.2: right click on an unknown number
     ctl.row_dial_sig.connect(win.callback_result)
     ctl.dial_state_sig.connect(win.set_dial_state)
     ctl.panel_host = win                                  # v0.10.0-beta.3: call panel in the active main window

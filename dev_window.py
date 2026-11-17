@@ -166,8 +166,8 @@ class DevWindow(QWidget):
 
     # ---- window ----------------------------------------------------------------------------------------------
     def show_and_raise(self) -> None:
-        self._refresh_health()
         self.showNormal()
+        self._refresh_health(force=True)    # v1.0.0-rc.2: was called while still hidden -> skipped, stale rows
         self.raise_()
         self.activateWindow()
 
@@ -196,8 +196,8 @@ class DevWindow(QWidget):
         super().hideEvent(e)
 
     # ---- health ----------------------------------------------------------------------------------------------
-    def _refresh_health(self) -> None:
-        if not self.isVisible() and self._rows["bria"].text():
+    def _refresh_health(self, force: bool = False) -> None:
+        if not force and not self.isVisible() and self._rows["bria"].text():
             return
         m = self.model
         for key, item in (("bria", m.bria), ("minicrm", m.minicrm), ("extension", m.extension),

@@ -27,8 +27,8 @@ from PySide6.QtGui import (QColor, QCursor, QDesktopServices, QFont, QFontMetric
                            QKeySequence, QPainter, QPen, QShortcut)
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QPushButton, QStyle, QStyledItemDelegate, QSystemTrayIcon, QToolTip, QVBoxLayout,
-    QWidget,
+    QListWidget, QListWidgetItem, QMenu, QPushButton, QStyle, QStyledItemDelegate, QSystemTrayIcon, QToolTip,
+    QVBoxLayout, QWidget,
 )
 
 import icons
@@ -111,6 +111,7 @@ class StatusModel(QObject):
         self.ext_expected = ""                   # version shipped with the app
         self.started = time.monotonic()
         self.calls: list[CallRecord] = []
+        self._detached: dict[str, CallRecord] = {}   # v1.0.0-rc.2: older rows (search) under Újrakeresés
         if store is not None:
             for row in store.load(self.MAX_CALLS):
                 fields = {k: row[k] for k in row if k in CallRecord.__dataclass_fields__}
@@ -206,7 +207,21 @@ class StatusModel(QObject):
 
     # -- calls ----------------------------------------------------------
     def _find(self, call_id: str) -> CallRecord | None:
-        return next((c for c in self.calls if c.call_id == call_id), None)
+        return next((c for c in self.calls if c.call_id == call_id), None) or self._detached.get(call_id)
+
+    def lookup_restarted(self, rec: CallRecord) -> CallRecord:
+        """v1.0.0-rc.2 Újrakeresés: the row shows "Keresés…" until call_resolved. A row that is only in the
+        database (older than the in-memory list) is kept here meanwhile, so the result and the company find it.
+        "pending" is not saved: if the app quits now, the row keeps its previous state."""
+        live = self._find(rec.call_id)
+        if live is None:
+            live = rec
+            self._detached[rec.call_id] = rec
+            while len(self._detached) > 50:
+                self._detached.pop(next(iter(self._detached)))
+        live.lookup, live.detail = "pending", ""
+        self.changed.emit()
+        return live
 
     def _commit(self, rec: CallRecord | None) -> None:
         if rec is not None and self.store is not None:
@@ -275,7 +290,7 @@ class StatusModel(QObject):
         Without a working store: the in-memory list, filtered."""
         def inside(c):
             return (since is None or c.started >= since) and (until is None or c.started < until)
-        mem = {c.call_id: c for c in self.calls if inside(c)}
+        mem = {c.call_id: c for c in (*self.calls, *self._detached.values()) if inside(c)}
         if self.store is None or not getattr(self.store, "ok", False):
             return [c for c in self.calls if inside(c)]
         out = []
@@ -397,6 +412,13 @@ ROLE = Qt.ItemDataRole.UserRole
 ACTIONS = (("callback", "phone", "Visszahívás"), ("crm", "crm", "MiniCRM megnyitása"),
            ("copy", "copy", "Szám másolása"), ("google", "google", "Google keresés"))
 IN_CALL_TIP = "Hívás közben nem indítható"
+
+
+def relookup_allowed(c) -> bool:
+    """v1.0.0-rc.2: Újrakeresés is offered for a finished lookup without a name (unknown or failed) of a number
+    long enough to search (a lookup still running is not doubled)."""
+    return (isinstance(c, CallRecord) and not c.name and c.lookup in ("unknown", "failed")
+            and dialable(c.number))
 
 
 def dialable(number: str) -> bool:
@@ -628,7 +650,8 @@ class CallDelegate(QStyledItemDelegate):
         if c.name or c.lookup not in ("pending", "failed"):
             parts.append((c.number, "subtext"))
         elif c.lookup == "failed":
-            parts.append(("Keresés sikertelen", "yellow"))
+            parts.append(("MiniCRM: jelentkezz be" if "expired" in (c.detail or "") else "Keresés sikertelen",
+                          "yellow"))
         else:
             parts.append(("Keresés…", "subtext"))
         parts.append((STATUS_HU.get(c.status, c.status), STATUS_COLOR.get(c.status, "subtext")))
@@ -721,6 +744,7 @@ class MainWindow(QWidget):
     """Normal user window: plain status + call history. Signals are wired in main.py."""
     open_settings = Signal()            # v0.9.0: ⚙ gear (Beállítások: Mellékek, Megjelenés, Fejlesztői mód, Névjegy)
     callback_requested = Signal(object)  # v0.10.0-beta.2: Visszahívás from a history row (CallRecord)
+    relookup_requested = Signal(object)  # v1.0.0-rc.2: right-click Újrakeresés on an unknown number (CallRecord)
 
     TYPE_FILTERS = (("all", "Összes"), ("missed", "Nem fogadott"))
     DATE_FILTERS = (("any", "Bármikor"), ("today", "Mai"), ("yesterday", "Tegnap"), ("week", "A héten"),
@@ -811,6 +835,8 @@ class MainWindow(QWidget):
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list.setMouseTracking(True)
         self.list.itemClicked.connect(self._item_clicked)
+        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)    # v1.0.0-rc.2
+        self.list.customContextMenuRequested.connect(self._context_menu)
         self.list.viewport().installEventFilter(self)
         root.addWidget(self.list, 1)
         self.empty = QLabel()
@@ -1103,6 +1129,19 @@ class MainWindow(QWidget):
         elif kind == "copy" and c.number:
             QApplication.clipboard().setText(c.number)
             self.delegate.flash_copied(c.call_id)
+
+    def _context_menu(self, pos) -> None:
+        """v1.0.0-rc.2: right click on a row whose number is unknown (no MiniCRM name, or the lookup failed):
+        one item, Újrakeresés a MiniCRM-ben (the contact may have been added since). Other rows: no menu."""
+        it = self.list.itemAt(pos)
+        c = it.data(ROLE) if it else None
+        if not relookup_allowed(c):
+            return
+        menu = QMenu(self.list)
+        menu.setStyleSheet(theme.qss_menu())          # same look as the tray menu, current theme
+        act = menu.addAction("Újrakeresés a MiniCRM-ben")
+        if menu.exec(self.list.viewport().mapToGlobal(pos)) is act:
+            self.relookup_requested.emit(c)
 
     def _key_action(self, kind: str) -> None:
         it = self.list.currentItem()

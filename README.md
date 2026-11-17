@@ -1,6 +1,6 @@
 # Call Companion
 
-**Version 1.0.0-rc.1** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
+**Version 1.0.0-rc.2** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
 
 Call Companion is a small tray application that watches the **Bria Enterprise** softphone and, the moment a
 call rings, shows a frameless pop-up card (dark or light, see [Themes](#themes)) in the bottom-right corner of the screen (it steps left of Bria's own
@@ -128,7 +128,9 @@ least 6 digits and with Bria control on; disabled while a call rings or runs), *
 MiniCRM, otherwise the slot stays empty), **Másolás** (turns into a green ✓) and **Google**. At rest they show at 72 %,
 over the row they get a soft background, the button under the mouse a stronger one and a tooltip (*Visszahívás: +36 …*).
 In a missed-call row the Visszahívás icon is always green. One click, no selection needed (keyboard: Enter =
-MiniCRM, Ctrl+C = copy). The row's direction arrow, the day headers' chevrons, the ⚙ and the search icon are drawn
+MiniCRM, Ctrl+C = copy). **Right click** on a row whose number has no MiniCRM name (*Ismeretlen hívó*, *Keresés
+sikertelen*) offers **Újrakeresés a MiniCRM-ben** (1.0.0-rc.2): the number is searched again and the row (and the
+stored history) gets the name and company - for a contact added since the call. The row's direction arrow, the day headers' chevrons, the ⚙ and the search icon are drawn
 too. The time and the actions keep their place however narrow the window is.
 
 **Visszahívás** (call back) starts an outgoing call through the Bria Desktop API (`GET /call`); the number is sent in
@@ -623,7 +625,8 @@ registry key; the installer removes that key and uses a Startup-folder shortcut 
 | `base_url` | `https://r3.minicrm.hu/` | MiniCRM host |
 | `system_id` | `"60171"` (built into `crm.py`) | Your MiniCRM system id, the number in the URL |
 | `batch_url` | built from the two above | Full override of the search request URL |
-| `session_check_url` | `https://r3.minicrm.hu/` | Page used to test whether the session is logged in |
+| `session_check_url` | `https://r3.minicrm.hu/` | No longer used (1.0.0-rc.2): the session check runs the call's own search |
+| `session_probe_term` | `"000000000"` (read by `crm.py`, not in `config.py`) | Number the session check searches for (1.0.0-rc.2; a number with no match keeps the request small) |
 | `login_url_hint` | `"login"` | A redirect containing this text means "logged out" |
 | `search_variants` | `["{tail9}"]` | Extra number spellings tried after `06...` and `+36...` (`{local}`, `{e164}`, `{digits}`, `{tail9}`) |
 | `search_type` | `"Person"` (read by `crm.py`, not in `config.py`) | Type filter of the search request (MiniCRM's *Személy* filter): only person cards are returned. `""` = no filter; the person is then searched for by paging |
@@ -756,7 +759,11 @@ Everything is logged to `%LOCALAPPDATA%\CallCompanion\app.log` (cookies and resp
 | Bria row "A napló N perce nem változott" | Bria may not be running, or the line is simply quiet |
 | `lookup ... no MiniCRM session yet` / card says so | The extension has not pushed cookies yet: open Chrome with MiniCRM logged in; check the extension badge |
 | `extension push (startup\|cookies\|heartbeat\|retry\|retry-fast\|poke\|user\|installed): N cookies` | The extension delivered the session (the reason shows what triggered the push; `retry-fast` and `poke` = it was waiting for the app and delivered within seconds of the app starting) |
-| `session state: False` / "MiniCRM login needed" card | The MiniCRM session expired: log in again in Chrome |
+| `session state: False` / "MiniCRM login needed" card | The MiniCRM session expired: log in again in Chrome. Since 1.0.0-rc.2 the check runs the same search as a call, after every lookup that hit an expired session and at every extension heartbeat (5 min) |
+| `lookup for call <id> hit an expired session -> session re-check` | A call's lookup got 401/403; the session is checked at once, the call is looked up again when the session is valid (`relookup (session back) ...`) |
+| `session check denied:` / `lookup N/3 denied: HTTP 403 url=... server=... waf=... set-cookie=...; jar: ...` | Who refused the request (a `waf` entry = a firewall in front of MiniCRM) and the cookie names sent (no values) |
+| `session cookies: NAME@domain, ... (DUPLICATE: NAME)` | The extension's cookie set changed; `DUPLICATE` = the same cookie name on two domains, the server may get the old one |
+| `relookup (row) for call <id> ...1234` | *Újrakeresés a MiniCRM-ben* from the history's right-click menu |
 | `session state: None no cookies` | No extension push yet: Chrome closed or extension not loaded |
 | `connection warm-up active` / `failing` | The keep-alive request to MiniCRM works / does not work (logged on state changes only) |
 | `lookup ... (N ms, warm=True)` | The lookup reused the warm connection |
@@ -848,7 +855,10 @@ and one-click transfer through the Bria Desktop API, extension list.
 - **0.10.0-beta** (UI/UX revision, design approved 2026-11-13): **beta.1** theme system with dark / light /
   system mode (done, verified live); **beta.2** drawn icons, history row buttons, *Visszahívás* (done, verified live); **beta.3** call panel inside
   the active main window, days in the history rows (done, verified live).
-- **1.0.0-rc.1** (this release): the new app logo everywhere (app, tray, installer, extension, Névjegy), Chrome
+- **1.0.0-rc.2** (this release): an honest MiniCRM session check (the call's own search), red status and notice when a
+  lookup hits an expired session, automatic re-lookup afterwards, 403 diagnostics, right-click *Újrakeresés* on
+  unknown numbers in the history.
+- **1.0.0-rc.1**: the new app logo everywhere (app, tray, installer, extension, Névjegy), Chrome
   extension 1.0.0 and its Chrome Web Store material (`store/`, privacy page `docs/privacy.html`), clean-up of unused
   settings and packages.
 - **1.0.0** = 1.0.0-rc after a week without new issues; the Chrome extension comes from the Chrome Web Store then;
