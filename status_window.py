@@ -802,8 +802,16 @@ class MainWindow(QWidget):
         self.store_btn.setToolTip("Megnyitja a Call Companion bővítmény oldalát. Ha nincs telepítve: "
                                   "Hozzáadás a Chrome-hoz.")
         self.store_btn.clicked.connect(self._open_store)
-        self.store_btn.setVisible(False)
-        cl.addWidget(self.store_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        # under the text, not beside the report button: two buttons in the row squeezed the text (preview 1.0.0).
+        # In a holder with a 6 px top margin, hidden as a whole, so other states keep their old layout.
+        self.store_row = QWidget(objectName="storeRow")
+        self.store_row.setStyleSheet("QWidget#storeRow { background: transparent; }")   # the card's colour shows
+        sr = QHBoxLayout(self.store_row)
+        sr.setContentsMargins(0, 6, 0, 0)
+        sr.addWidget(self.store_btn)
+        sr.addStretch(1)
+        self.store_row.setVisible(False)
+        txt.addWidget(self.store_row)
         self.gear = QPushButton("", objectName="gear")
         self.gear.setIconSize(QSize(18, 18))
         self.gear.setToolTip("Beállítások")
@@ -1023,7 +1031,7 @@ class MainWindow(QWidget):
         self.st_code.setText(f"Hibakód: {s.code}" if s.code else "")
         self.st_code.setVisible(bool(s.code))
         self.report_btn.setVisible(s.state in (Health.WARN, Health.ERROR))
-        self.store_btn.setVisible(s.code == "EXT-OFFLINE")
+        self.store_row.setVisible(s.code == "EXT-OFFLINE")
 
     def _filtering(self) -> bool:
         return self._type != "all" or self._date != "any" or bool(self.search.text().strip())
