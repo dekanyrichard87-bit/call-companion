@@ -22,6 +22,7 @@ from events import CallEvent, normalize_number
 
 log = logging.getLogger(__name__)
 MAX_BODY = 256 * 1024
+_REJECTED: set = set()      # 1.0.0: extension origins refused by the extension_id pin (logged once each)
 KINDS = {"ring": "ringing", "answer": "answered", "end": "ended"}
 DIRECTIONS = ("in", "out")
 REASONS = ("", "cancel", "bye", "rejected", "failed", "elsewhere")
@@ -57,7 +58,13 @@ class LocalApi(threading.Thread):
                 if not origin.startswith("chrome-extension://"):
                     return False
                 pin = cfg.get("extension_id", "").strip()
-                return not pin or origin == "chrome-extension://" + pin
+                if not pin or origin == "chrome-extension://" + pin:
+                    return True
+                if origin not in _REJECTED:          # 1.0.0: once per origin, e.g. a leftover unpacked copy
+                    _REJECTED.add(origin)
+                    log.warning("local api: extension %s rejected - only the Chrome Web Store extension %s is "
+                                "accepted (local_api.extension_id)", origin, pin)
+                return False
 
             def do_OPTIONS(self):
                 self._send(403, {"error": "forbidden"})

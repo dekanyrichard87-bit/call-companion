@@ -1,6 +1,6 @@
 # Call Companion
 
-**Version 1.0.0-rc.3** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
+**Version 1.0.0** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
 
 Call Companion is a small tray application that watches the **Bria Enterprise** softphone and, the moment a
 call rings, shows a frameless pop-up card (dark or light, see [Themes](#themes)) in the bottom-right corner of the screen (it steps left of Bria's own
@@ -381,15 +381,11 @@ Carried over from earlier releases:
 | Needs Bria **Log Level = Verbose** | At lower levels Bria writes no SIP messages | Help > Troubleshooting > Support. Verbose logs grow quickly. The app opens the log only for each read, so Bria can rotate or rename it; rotation has not been tested live |
 | **Main window position is best effort** | Windows 11 often reports no position for tray icons, so the window goes to the bottom-right of the usable area of the screen under the cursor (or the primary screen) rather than exactly at the icon | - |
 | **Stale-log warning after 30 min** | The Bria health row turns yellow when `Log.txt` has not changed for 30 minutes, which can also happen on a quiet line | Treat it as a hint, not an error |
-| Chrome developer-mode extension | The extension is loaded unpacked, so Chrome shows a developer-mode warning at some start-ups | Chrome Web Store publication planned with 1.0.0 (the store zip is built already) |
 | Hungarian-centric number handling | `+36`, `06`, `0036`, PBX-prefixed `000 36...` and outside-line `0 06...` (`006...`, 0.10.0-beta.2.1) forms are normalised; other countries are searched as `+<digits>` | - |
 | "Glass" effect is translucent only | No acrylic blur yet | - |
-| **Live follow of Windows' theme is unverified** | *Rendszer szerint* relies on Qt reporting Windows' app-theme change (Qt 6.5+) | The theme is also re-read whenever a window of the app opens; check the `theme: system changed` log line |
 | **Visszahívás is off during a call** | What Bria does with a second call while one is live is not tested | Hang up first, or dial in Bria |
-| **Drawn icons need QtSvg in the exe** | PyInstaller bundles it because it is imported; unverified until the first build of 0.10.0-beta.2 | Without it `app.log` says `icons: QtSvg not available` and text glyphs are shown |
 | **Call panel: Bria may take the focus** | If Bria brings its own window forward when a call rings, the main window is no longer active and the card appears (by the rule) | Watch the `panel:` log lines in the live test |
-| Chrome extension popup is dark only | The extension did not change in 0.10.0-beta (a change needs a reload on every PC) | Planned with the Web Store extension (1.0.0) |
-| **Installer not yet run on a clean machine** | `build.ps1` / `installer.iss` / `updater.py` were written and their logic unit-tested, but the first real build and the first update cycle happen on the colleague's PC test | Follow [the test plan](#first-test-on-a-colleagues-pc) |
+| Chrome extension popup is dark only | Every extension change is a new Chrome Web Store review | Planned as extension 1.0.1 (store update); the app ships the new extension version only after the store has published it, otherwise both PCs would show `EXT-OLD` |
 | **Unsigned exe and installer** | No code-signing certificate. A setup downloaded with a browser gets a SmartScreen *Windows protected your PC* screen; antivirus may look harder at a new PyInstaller exe | *More info > Run anyway* once. Updates downloaded by the app itself carry no download mark, so they do not trigger SmartScreen. Code-signing is on the roadmap |
 | **Update integrity = GitHub account** | The installer is checked against the SHA-256 published in the same release, which catches broken downloads but not a compromised GitHub account | Keep 2FA on the GitHub account; code-signing would add a real publisher check |
 | History keeps up to 90 days / 2000 calls | `history.retention_days`, `history.max_rows` | Developer tools > *Híváselőzmények törlése…* clears it |
@@ -408,9 +404,10 @@ Nothing has to be installed beforehand: the setup contains the Python runtime, Q
    *Windows protected your PC*: **More info > Run anyway** (the file is not code-signed yet).
 2. There are no questions: it installs for the current user to `%LOCALAPPDATA%\Programs\CallCompanion` (no admin
    rights), then the last page offers to start the app. The tray icon appears.
-3. **Chrome extension, once**: `chrome://extensions` > **Developer mode** > **Load unpacked** > choose
-   `%LOCALAPPDATA%\Programs\CallCompanion\extension` (Start menu: *Call Companion > Chrome extension folder* opens it).
-   Log in to MiniCRM in that Chrome.
+3. **Chrome extension, once** (1.0.0): open its [Chrome Web Store page](https://chromewebstore.google.com/detail/hmmimbnglnhilhbakdboepenlfkjgjpj) (unlisted, so only
+   this link finds it) and click **Add to Chrome** (*Hozzáadás a Chrome-hoz*). With Chrome sync on, the same Google
+   profile on another PC gets it by itself. Log in to MiniCRM in that Chrome. The installer's last page shows the
+   link; the main window's **EXT-OFFLINE** state has a *Bővítmény a Chrome Webáruházban* button.
 4. **Bria**: *Help > Troubleshooting > Support > Log Level = Verbose*, restart Bria.
 
 What the installer sets up:
@@ -419,7 +416,7 @@ What the installer sets up:
 |---|---|
 | Program | `%LOCALAPPDATA%\Programs\CallCompanion\CallCompanion.exe` (+ `_internal\`, `config.json`, `extension\`) |
 | Autostart | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Call Companion.lnk` (disable: Win+R `shell:startup`, delete it) |
-| Start menu | *Call Companion* (starts the app / opens the main window) and *Chrome extension folder* |
+| Start menu | *Call Companion* (starts the app / opens the main window) (1.0.0: the old *Chrome extension folder* shortcut is removed) |
 | Uninstall | *Settings > Apps > Installed apps > Call Companion > Uninstall* (or *Control Panel > Programs and Features*). Removes the program, the shortcuts and downloaded updates; keeps `%LOCALAPPDATA%\CallCompanion` (logs, personal config). Remove the Chrome extension by hand |
 | Old autostart | The `HKCU\...\Run\CallCompanion` value from source installs is deleted, so the app never starts twice |
 
@@ -478,6 +475,17 @@ notes from the matching `CHANGELOG.md` section.
 
 Do not delete or re-tag a published release that PCs have already installed; publish a higher version instead.
 
+### Preview and live test of 1.0.0 (Chrome Web Store extension)
+
+Before publishing: `.venv\Scripts\python status_window.py --ext-offline` - the status card shows **EXT-OFFLINE** with
+the *Bővítmény a Chrome Webáruházban* button (opens the store page); check both themes and that the two buttons fit.
+
+After `.\build.ps1 -Publish` (release `v1.0.0`), on both PCs (both already run the store extension):
+
+1. The main window stays green; `app.log` has `extension push (...)` lines and no `local api: extension ... rejected`.
+2. *Start menu > Call Companion* no longer has the *Chrome extension folder* shortcut.
+3. If `rejected` shows up: an old unpacked copy is still installed in that Chrome - remove it in `chrome://extensions`.
+
 ### Preview and live test of 1.0.0-rc.1 (new logo, extension 1.0.0)
 
 Before publishing: `.venv\Scripts\python status_window.py` - the window icon and ⚙ > Névjegy show the new logo
@@ -492,15 +500,22 @@ After `.\build.ps1 -Publish` (release `v1.0.0-rc.1`):
 4. GitHub Pages on (repository *Settings > Pages*), `https://dekanyrichard87-bit.github.io/call-companion/privacy.html`
    opens; then the store upload (`store/listing.md`).
 
-### Chrome Web Store (1.0.0-rc.1 preparation)
+### Chrome Web Store
 
 Everything the store asks for is in the repository: `store/listing.md` (texts field by field, permission
 justifications, privacy answers), `store/promo-440x280.png`, `extension/icons/icon128.png`, the privacy policy
 `docs/privacy.html` (served by GitHub Pages: repository *Settings > Pages > Deploy from a branch > main / docs*,
 address `https://dekanyrichard87-bit.github.io/call-companion/privacy.html`) and the package
 `dist\CallCompanion-extension-1.0.0.zip` written by `build.ps1`. Upload it as **Unlisted** in the Developer Dashboard;
-the review can take days. Once it is published, 1.0.0 pins the store id (`local_api.extension_id`) and the two PCs
-switch from the unpacked extension to the store one.
+the review can take days. **Published 2026-11-17** (unlisted, version 1.0.0 / `1.0.0-rc.1`, id
+`hmmimbnglnhilhbakdboepenlfkjgjpj`, [store page](https://chromewebstore.google.com/detail/hmmimbnglnhilhbakdboepenlfkjgjpj)); both PCs switched to it the same day, and 1.0.0 pins its id
+(`local_api.extension_id`).
+
+A later extension change: raise `version` in `extension/manifest.json` (the store needs a higher number than
+`1.0.0`, e.g. `1.0.1`), upload the new zip, wait for the review, and only then release an app version that ships the
+new manifest (the app compares the pushed version with its own copy: `EXT-OLD`). To test the change before upload,
+load it unpacked and set `"local_api": {"extension_id": ""}` in `%LOCALAPPDATA%\CallCompanion\config.json` (remove
+it afterwards).
 
 ---
 
@@ -571,22 +586,23 @@ one call in Bria, that one). `"bria_api": {"enabled": false}` hides the buttons.
 
 ### 3. Chrome extension (pairing)
 
-1. Open `chrome://extensions`, switch on **Developer mode**, click **Load unpacked**, choose the `extension` folder.
-   After an app update that changed the extension (0.4.0, 0.9.0, 1.0.0), click the reload icon (↻) on the extension card
-   once: the main window says so with `EXT-OLD`. Pin the extension (puzzle icon > 📌) to see its status icon.
+1. Install it from the [Chrome Web Store page](https://chromewebstore.google.com/detail/hmmimbnglnhilhbakdboepenlfkjgjpj) (*Add to Chrome*); Chrome updates it by itself. Pin the
+   extension (puzzle icon > 📌) to see its status icon. (Developing the extension: *Load unpacked* the `extension`
+   folder and clear the pin, see [Chrome Web Store](#chrome-web-store).)
 2. Log in to MiniCRM in **that Chrome profile**.
 3. With the app running, `app.log` shows `extension push (...): N cookies` and the tray tooltip changes to
    *Call Companion – aktív*; the extension row in the developer tools shows the last sync time and the extension
    version. A red `!` on the extension icon means the app is not reachable; the extension keeps retrying, and its
    popup shows the details.
-4. Optional hardening: copy the extension's ID from `chrome://extensions` into `local_api.extension_id` so only
-   that extension may talk to the app.
+4. Since 1.0.0 the app accepts only the store extension (`local_api.extension_id` =
+   `hmmimbnglnhilhbakdboepenlfkjgjpj`); any other extension gets `403` and one log line
+   `local api: extension chrome-extension://... rejected`.
 
 The extension needs the `cookies` and `alarms` permissions, host access to `https://r3.minicrm.hu/*`
 (cookies, and a content script that only wakes the extension and reads nothing from the page) and to `http://127.0.0.1/*`. It talks only to
 `127.0.0.1:48653` (the port must match `config.json`, `extension/background.js` and `extension/popup.js`). No new
 permission in 0.9.0 (the badge and popup need none). `build.ps1` also writes `dist\CallCompanion-extension-<ver>.zip`,
-the package for a later Chrome Web Store upload (planned with 1.0.0).
+the package for a Chrome Web Store upload.
 
 ### 4. Test without a real call
 
@@ -665,7 +681,7 @@ system: open a contact in MiniCRM with Chrome DevTools (F12) > Network open, fin
 *Form Data* (**view source**), replacing the contact id with `{id}`. Then watch `app.log` for the `company id=...` lines
 (see [troubleshooting](#logs-and-troubleshooting)).
 
-**`local_api`**: `enabled` (`true`), `host` (`127.0.0.1`), `port` (`48653`), `extension_id` (`""`, optional pin).
+**`local_api`**: `enabled` (`true`), `host` (`127.0.0.1`), `port` (`48653`), `extension_id` (`"hmmimbnglnhilhbakdboepenlfkjgjpj"` since 1.0.0 = only the Chrome Web Store extension; `""` = any extension, for testing an unpacked copy).
 
 **`detectors.bria_log`**: `enabled` (`true`), `log_path` (`""`; optional exact log file or list of files, no search when
 set), `log_globs` (see above), `log_globs_fallback` (see above), `incoming_regex` (`incoming from`),
@@ -855,7 +871,7 @@ and one-click transfer through the Bria Desktop API, extension list.
 - **0.10.0-beta** (UI/UX revision, design approved 2026-11-13): **beta.1** theme system with dark / light /
   system mode (done, verified live); **beta.2** drawn icons, history row buttons, *Visszahívás* (done, verified live); **beta.3** call panel inside
   the active main window, days in the history rows (done, verified live).
-- **1.0.0-rc.3** (this release): the card no longer steps aside for a Bria window that other windows cover
+- **1.0.0-rc.3**: the card no longer steps aside for a Bria window that other windows cover
   completely (it stayed left of the corner during a call while Bria was behind Adobe Reader).
 - **1.0.0-rc.2**: an honest MiniCRM session check (the call's own search), red status and notice when a
   lookup hits an expired session, automatic re-lookup afterwards, 403 diagnostics, right-click *Újrakeresés* on
@@ -863,8 +879,11 @@ and one-click transfer through the Bria Desktop API, extension list.
 - **1.0.0-rc.1**: the new app logo everywhere (app, tray, installer, extension, Névjegy), Chrome
   extension 1.0.0 and its Chrome Web Store material (`store/`, privacy page `docs/privacy.html`), clean-up of unused
   settings and packages.
-- **1.0.0** = 1.0.0-rc after a week without new issues; the Chrome extension comes from the Chrome Web Store then;
-  the extension list and history format are frozen.
+- **1.0.0** (this release, done): the Chrome extension comes from the Chrome Web Store (published 2026-11-17,
+  unlisted) and the app accepts only that one; the extension list and history format are frozen.
+
+**After 1.0** (agreed order): extension 1.0.1 with a light popup (store update first); call detection from the Bria
+Desktop API instead of the Verbose log; Bria as a hidden engine; the transfer UI if the provider enables it.
 
 Also open (any time before or after 1.0):
 
@@ -877,7 +896,7 @@ Also open (any time before or after 1.0):
 
 Candidates after that: keeping the last session
 encrypted per user so the first call after boot already works, an automated test suite, handling several simultaneous
-calls, acrylic blur, Chrome Web Store (unlisted) publication of the extension.
+calls, acrylic blur.
 
 ---
 

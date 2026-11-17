@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 import icons
 import theme
 from call_panel import CallPanel
+from version import EXTENSION_STORE_URL
 
 log = logging.getLogger("callcompanion.status")
 
@@ -171,7 +172,8 @@ class StatusModel(QObject):
         if e in (Health.WARN, Health.UNKNOWN) and not starting and m is not Health.OK:
             return Summary(Health.WARN, "Nincs kapcsolat a Chrome-mal",
                            "Nyissa meg a Chrome-ot (benne a MiniCRM-mel). Ha nyitva van, ellenőrizze, hogy a "
-                           "Call Companion bővítmény be van-e kapcsolva.", "EXT-OFFLINE")
+                           "Call Companion bővítmény be van-e kapcsolva. Ha hiányzik, a Webáruházból egy kattintással "
+                           "visszatehető.", "EXT-OFFLINE")
         if m is Health.WARN and not starting:
             return Summary(Health.WARN, "A MiniCRM most nem érhető el",
                            "Ellenőrizze az internetkapcsolatot. A hívások ettől még megjelennek, csak név "
@@ -181,8 +183,8 @@ class StatusModel(QObject):
                                                        "MiniCRM-hez.")
         if self.extension_outdated():
             return Summary(Health.WARN, "Frissítse a Chrome bővítményt",
-                           "A Call Companion újabb bővítménnyel érkezett. Nyissa meg a Chrome-ban a "
-                           "chrome://extensions oldalt, és a Call Companion bővítményen kattintson a ↻ ikonra.",
+                           "A Chrome magától frissíti a bővítményt, általában néhány órán belül. Ha sürgős: "
+                           "chrome://extensions > Fejlesztői mód > Frissítés.",
                            "EXT-OLD")
         if self.bria_api.state is Health.ERROR:
             return Summary(Health.WARN, "A kártya hívásgombjai nem működnek",
@@ -795,6 +797,13 @@ class MainWindow(QWidget):
         self.report_btn.setToolTip("A hiba leírása a vágólapra kerül (hívóadatok nélkül) – illessze be egy e-mailbe.")
         self.report_btn.clicked.connect(self._copy_report)
         cl.addWidget(self.report_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        # 1.0.0: EXT-OFFLINE only - opens the extension's Chrome Web Store page (reinstall in one click)
+        self.store_btn = QPushButton("Bővítmény a Chrome Webáruházban")
+        self.store_btn.setToolTip("Megnyitja a Call Companion bővítmény oldalát. Ha nincs telepítve: "
+                                  "Hozzáadás a Chrome-hoz.")
+        self.store_btn.clicked.connect(self._open_store)
+        self.store_btn.setVisible(False)
+        cl.addWidget(self.store_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         self.gear = QPushButton("", objectName="gear")
         self.gear.setIconSize(QSize(18, 18))
         self.gear.setToolTip("Beállítások")
@@ -1014,6 +1023,7 @@ class MainWindow(QWidget):
         self.st_code.setText(f"Hibakód: {s.code}" if s.code else "")
         self.st_code.setVisible(bool(s.code))
         self.report_btn.setVisible(s.state in (Health.WARN, Health.ERROR))
+        self.store_btn.setVisible(s.code == "EXT-OFFLINE")
 
     def _filtering(self) -> bool:
         return self._type != "all" or self._date != "any" or bool(self.search.text().strip())
@@ -1154,6 +1164,10 @@ class MainWindow(QWidget):
         log.info("problem report copied to the clipboard (%s)", self.model.summary().code)
         flash(self.report_btn, "A vágólapra másolva")
 
+    def _open_store(self) -> None:
+        log.info("extension: Chrome Web Store page opened (EXT-OFFLINE)")
+        QDesktopServices.openUrl(QUrl(EXTENSION_STORE_URL))
+
 
 StatusWindow = MainWindow       # old name (0.3 - 0.5)
 
@@ -1202,7 +1216,7 @@ def attach_to_tray(tray: QSystemTrayIcon, window: MainWindow) -> None:
 
 # ---------------------------------------------------------- standalone demo --
 def _demo() -> int:
-    """Preview with sample data (no Bria, no MiniCRM, nothing saved): python status_window.py
+    """Preview with sample data (no Bria, no MiniCRM, nothing saved): python status_window.py [--ext-offline]
     Several days of calls (day groups, filters), a narrow-window check, and ⚙ opens the settings dialog."""
     import tempfile
     app = QApplication(sys.argv)
@@ -1215,6 +1229,9 @@ def _demo() -> int:
     model.started -= 60
     for s in ("set_minicrm", "set_bria", "set_extension", "set_api"):
         getattr(model, s)(Health.OK, "ok")
+    if "--ext-offline" in sys.argv:              # 1.0.0 preview: the EXT-OFFLINE state with its store button
+        model.set_extension(Health.WARN, "demo: no push from Chrome")
+        model.set_minicrm(Health.WARN, "demo: no session")
     samples = [("Minta Anna", "Feszültség Kft.", "+36301234567", "ended", 135, "in"),
                (None, None, "+4915123456789", "missed", 0, "in"),
                ("Kovács Péter", "Nagyon Hosszú Nevű Építőipari és Kereskedelmi Kft.", "+36201112233", "ended", 62,

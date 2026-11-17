@@ -23,6 +23,8 @@
 #define AppName   "Call Companion"
 #define AppExe    "CallCompanion.exe"
 #define AppRepo   "https://github.com/dekanyrichard87-bit/call-companion"
+; 1.0.0: same as version.EXTENSION_STORE_URL (the Chrome extension's Web Store page)
+#define ExtStoreUrl "https://chromewebstore.google.com/detail/hmmimbnglnhilhbakdboepenlfkjgjpj"
 #define HasHungarian FileExists(AddBackslash(CompilerPath) + "Languages\Hungarian.isl")
 
 [Setup]
@@ -73,12 +75,10 @@ Name: "hungarian"; MessagesFile: "compiler:Languages\Hungarian.isl"
 #endif
 
 [CustomMessages]
-english.ExtFolder=Chrome extension folder
-english.ExtHint=Chrome extension (one time):%nchrome://extensions -> Developer mode -> Load unpacked ->%n%1
+english.ExtHint=Chrome extension (one time, if Chrome does not have it yet):%nopen its Chrome Web Store page and click "Add to Chrome":%n%1
 english.ExtRemove=Call Companion was removed.%n%nPlease also remove the "Call Companion" extension in Chrome (chrome://extensions).
 #if HasHungarian
-hungarian.ExtFolder=Chrome bővítmény mappája
-hungarian.ExtHint=Chrome bővítmény (egyszer kell):%nchrome://extensions -> Fejlesztői mód -> Kicsomagolt bővítmény betöltése ->%n%1
+hungarian.ExtHint=Chrome bővítmény (egyszer kell, ha a Chrome-ban még nincs meg):%nnyissa meg a Chrome Webáruházban, és kattintson a „Hozzáadás a Chrome-hoz” gombra:%n%1
 hungarian.ExtRemove=A Call Companion eltávolítva.%n%nA Chrome-ból is távolítsa el a "Call Companion" bővítményt (chrome://extensions).
 #endif
 
@@ -86,6 +86,9 @@ hungarian.ExtRemove=A Call Companion eltávolítva.%n%nA Chrome-ból is távolí
 ; A fresh runtime folder on every update: no stale DLLs / .pyd files from an older build.
 Type: filesandordirs; Name: "{app}\_internal"
 Type: filesandordirs; Name: "{app}\extension"
+; 1.0.0: the extension comes from the Chrome Web Store; remove the old "extension folder" Start menu shortcut
+Type: files; Name: "{userprograms}\{#AppName}\Chrome extension folder.lnk"
+Type: files; Name: "{userprograms}\{#AppName}\Chrome bővítmény mappája.lnk"
 
 [Files]
 ; config.json next to the exe is the shipped config and is replaced on every update.
@@ -94,7 +97,6 @@ Source: "dist\CallCompanion\*"; DestDir: "{app}"; Flags: ignoreversion recursesu
 
 [Icons]
 Name: "{userprograms}\{#AppName}\{#AppName}"; Filename: "{app}\{#AppExe}"; Parameters: "--show"; WorkingDir: "{app}"
-Name: "{userprograms}\{#AppName}\{cm:ExtFolder}"; Filename: "{app}\extension"
 ; Autostart at logon (per user): %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Call Companion.lnk
 Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"
 
@@ -130,7 +132,7 @@ procedure CurPageChanged(CurPageID: Integer);
 begin
   if CurPageID = wpFinished then
     WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 +
-      FmtMessage(CustomMessage('ExtHint'), [ExpandConstant('{app}\extension')]);
+      FmtMessage(CustomMessage('ExtHint'), ['{#ExtStoreUrl}']);
 end;
 
 function InitializeUninstall(): Boolean;

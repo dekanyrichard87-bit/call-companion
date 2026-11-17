@@ -3,6 +3,39 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [1.0.0] - 2026-11-17
+
+First stable release. The Chrome extension is now the **Chrome Web Store** one (published 2026-11-17, unlisted, id
+`hmmimbnglnhilhbakdboepenlfkjgjpj`, store version 1.0.0 / `1.0.0-rc.1`); both PCs switched to it the same day and run
+it without problems (log 2026-11-17 13:12: `extension push (installed): 2 cookies`). The extension itself is unchanged.
+The release was cut on the user's decision on the day of rc.3 (the planned quiet week was skipped); a day of live
+calls on rc.2 / rc.3 showed no problem (answer, reject, hang-up, call back, outgoing, missed, Újrakeresés, no 403).
+
+### Changed
+- **Only the store extension may talk to the app** (`config.py`, `version.py`): `local_api.extension_id` defaults to
+  the store id (new constants `EXTENSION_STORE_ID` / `EXTENSION_STORE_URL`). Any other extension gets `403`. To test
+  an unpacked copy, set `"local_api": {"extension_id": ""}` in `%LOCALAPPDATA%\CallCompanion\config.json`.
+- **EXT-OFFLINE** (`status_window.py`): new button *Bővítmény a Chrome Webáruházban* (only in this state) opens the
+  store page, so a missing extension is back in one click; the hint says so.
+- **EXT-OLD** text: Chrome updates a store extension by itself (usually within hours); if urgent, *chrome://extensions >
+  Fejlesztői mód > Frissítés* (the old "click ↻" applied to the unpacked extension only).
+- **Installer** (`installer.iss`): the last page links the store page instead of the "Load unpacked" steps; the Start
+  menu shortcut *Chrome extension folder* is no longer created and is removed on update. The `extension\` folder is
+  still installed: the app reads its version for the `EXT-OLD` check.
+- **Shorter log** (`crm.py`): `company id=... -> none` lists the response fields (~3 KB) only once per run.
+- README: store installation, known limits cleaned up (developer-mode extension, theme live follow, QtSvg and the
+  clean-machine installer are done or verified), roadmap after 1.0.
+
+### Added
+- `local api: extension chrome-extension://<id> rejected - only the Chrome Web Store extension ... is accepted`
+  (`local_api.py`, once per origin): shows a leftover unpacked copy at once.
+- `python status_window.py --ext-offline`: preview of the EXT-OFFLINE state with the store button.
+
+### Not verified
+- The store button and the new installer page on the live PC (preview before publishing).
+- Live, from rc.3: a real call while Bria's window is completely covered (`placement: hidden Bria window ignored`);
+  the pre-release test showed it working.
+
 ## [1.0.0-rc.3] - 2026-11-17
 
 Fix release found in live use: during a call the card stayed left of the corner although nothing was there

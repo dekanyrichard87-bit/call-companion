@@ -168,6 +168,7 @@ class MiniCrmClient:
         self.has_session = False
         self._cache: dict[str, tuple[float, CallerInfo]] = {}   # number -> (expires at, result)
         self._company_cache: dict[str, tuple[float, str]] = {}  # contact id -> (expires at, company or "")
+        self._company_fields_logged = False                     # 1.0.0: "-> none fields=" logged once
         self._warm_stop = threading.Event()
         self._warm_kick = threading.Event()
         self._warm_thread = None
@@ -819,7 +820,11 @@ class MiniCrmClient:
         if company:
             log.info("company id=%s -> found=True from %s (%d ms)", pid, source, ms())
         else:
-            log.info("company id=%s -> none (%d ms) fields=%s", pid, ms(), self._key_paths(data))
+            if self._company_fields_logged:      # 1.0.0: the (~3 KB) field list once per run is enough
+                log.info("company id=%s -> none (%d ms)", pid, ms())
+            else:
+                self._company_fields_logged = True
+                log.info("company id=%s -> none (%d ms) fields=%s", pid, ms(), self._key_paths(data))
         return company, True
 
     # ---- fallback: the contact named in the sub-line of deal cards ------------------------------

@@ -5,6 +5,8 @@ import os
 import sys
 from pathlib import Path
 
+from version import EXTENSION_STORE_ID
+
 APP_NAME = "CallCompanion"
 
 DEFAULTS = {
@@ -33,7 +35,8 @@ DEFAULTS = {
         "enabled": True,
         "host": "127.0.0.1",
         "port": 48653,          # must match extension/background.js and manifest.json
-        "extension_id": "",     # optional: pin to your extension id (chrome://extensions)
+        # 1.0.0: only the Chrome Web Store extension is accepted. "" = any extension (testing an unpacked copy).
+        "extension_id": EXTENSION_STORE_ID,
     },
     "detectors": {
         "bria_log": {
