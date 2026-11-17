@@ -1,6 +1,6 @@
 # Call Companion
 
-**Version 1.0.0-rc.2** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
+**Version 1.0.0-rc.3** · Windows 10/11 x64 · one-click installer with automatic updates (built with Python 3.11+ / PySide6)
 
 Call Companion is a small tray application that watches the **Bria Enterprise** softphone and, the moment a
 call rings, shows a frameless pop-up card (dark or light, see [Themes](#themes)) in the bottom-right corner of the screen (it steps left of Bria's own
@@ -320,7 +320,7 @@ Carried over from earlier releases:
   toast is kept free by rule (the toast is a native Windows notification that no program can see); Bria's main window
   and small always-on-top pop-ups of other programs (e.g. Viber) are found with one window scan. The whole stack moves
   left of them, bottoms aligned, 12 px gap, and slides back (~150 ms) when they go away; never while the mouse is over
-  a card. `ui.placement: "fixed"` restores the old corner + offset behaviour.
+  a card. A Bria window that other windows cover completely does not count (1.0.0-rc.3). `ui.placement: "fixed"` restores the old corner + offset behaviour.
 - **Outgoing calls**: the card and the MiniCRM lookup (name and company) also work for the number you dial from Bria.
 - **Faster start-up sync**: the Chrome extension retries every 2 s for 2 minutes after the app was not reachable, and a
   MiniCRM tab pokes it every 5 s, so the session usually arrives within seconds of the app starting.
@@ -855,7 +855,9 @@ and one-click transfer through the Bria Desktop API, extension list.
 - **0.10.0-beta** (UI/UX revision, design approved 2026-11-13): **beta.1** theme system with dark / light /
   system mode (done, verified live); **beta.2** drawn icons, history row buttons, *Visszahívás* (done, verified live); **beta.3** call panel inside
   the active main window, days in the history rows (done, verified live).
-- **1.0.0-rc.2** (this release): an honest MiniCRM session check (the call's own search), red status and notice when a
+- **1.0.0-rc.3** (this release): the card no longer steps aside for a Bria window that other windows cover
+  completely (it stayed left of the corner during a call while Bria was behind Adobe Reader).
+- **1.0.0-rc.2**: an honest MiniCRM session check (the call's own search), red status and notice when a
   lookup hits an expired session, automatic re-lookup afterwards, 403 diagnostics, right-click *Újrakeresés* on
   unknown numbers in the history.
 - **1.0.0-rc.1**: the new app logo everywhere (app, tray, installer, extension, Névjegy), Chrome

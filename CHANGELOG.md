@@ -3,6 +3,23 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [1.0.0-rc.3] - 2026-11-17
+
+Fix release found in live use: during a call the card stayed left of the corner although nothing was there
+(log 2026-11-17 10:08-10:09: `placement: avoid BriaEnterprise.exe 318x879 -> 1859,1382` for the whole call, while
+Bria's narrow main window was open but completely behind Adobe Reader). The Chrome extension is unchanged.
+
+### Fixed
+- **A Bria window that other windows cover completely is no longer an obstacle** (`overlay.py`, `find_obstacles`,
+  new pure `_fully_covered`): the window scan now remembers the windows in front of each window (z-order) and skips a
+  Bria window that they hide entirely (sampled on a 6 x 6 grid). The card goes back to the corner; when Bria is
+  brought to the front, the 300 ms re-check moves the card aside again. Reserving Bria's toast area while an incoming
+  call rings is unchanged.
+
+### Not verified
+- The z-order cover test on the live PC. New log lines (only on change): `placement: hidden Bria window ignored: ...`
+  and `placement: Bria window no longer hidden (or closed / minimised): ...`.
+
 ## [1.0.0-rc.2] - 2026-11-17
 
 Fix release found in live use: the main window said everything was fine while the MiniCRM search already answered

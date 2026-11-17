@@ -23,7 +23,8 @@ the missed-call cards beyond it, the newest missed call nearest to the live call
 Placement (v0.9.0, config "ui" block, read from config.load() on first use):
     placement          auto (default): bottom-right corner of the primary work area; the stack steps left of
                        obstacles (Bria's toast area while an incoming call rings, Bria's main window, small topmost
-                       notification windows) and slides back when they go away. Re-checked every 300 ms only while
+                       notification windows) and slides back when they go away. A Bria window that other windows
+                       cover completely is not an obstacle (1.0.0-rc.3). Re-checked every 300 ms only while
                        a card is on screen (1 s with only missed cards), never while the mouse is over a card.
                        fixed: overlay_position + offset_x / offset_y as before 0.9.0 (no avoiding).
     avoid_gap_px, bria_toast (auto | off), toast_reserve_w / _h, avoid_ignore (process names), bria_process_regex
@@ -97,6 +98,7 @@ _PLACE_TIMER = None
 _TICK_LIVE_MS, _TICK_IDLE_MS = 300, 1000   # live / ringing card on screen | only missed cards: slower re-check
 _SLIDE_MS = 150
 _LAST_REASON = None         # last placement reason that was logged (only changes are logged)
+_LAST_HIDDEN = ()           # rc.3: Bria windows last ignored as fully covered (logged on change only)
 
 
 def configure_placement(ui: dict) -> None:
@@ -202,6 +204,24 @@ def _cloaked(hwnd) -> bool:
     return v.value != 0
 
 
+def _fully_covered(rect, covers, n: int = 6) -> bool:
+    """Pure geometry (unit-testable): True if every point of an n x n grid inside `rect` (l, t, r, b) lies in one of
+    the `covers` rects, i.e. the window is not visible anywhere (sampled; a sliver thinner than a grid step may be
+    missed, which only means the window is treated as hidden)."""
+    l, t, r, b = rect
+    if r <= l or b <= t:
+        return True
+    if not covers:
+        return False
+    for i in range(n):
+        y = t + (b - t) * (2 * i + 1) / (2 * n)
+        for j in range(n):
+            x = l + (r - l) * (2 * j + 1) / (2 * n)
+            if not any(c[0] <= x < c[2] and c[1] <= y < c[3] for c in covers):
+                return False
+    return True
+
+
 def find_obstacles(screen) -> list:
     """Windows the cards must not cover on `screen` (QScreen, the primary one): [((l, t, r, b), label)] in Qt
     logical px (right / bottom exclusive). One EnumWindows pass (~1-2 ms). [] if not Windows / any error.
@@ -219,6 +239,10 @@ def find_obstacles(screen) -> list:
         own_pid = os.getpid()
         cache, out = {}, []
         cls_buf = ctypes.create_unicode_buffer(64)
+        # rc.3: EnumWindows goes top -> bottom in z-order. `above` = the visible windows seen so far (they are in
+        # front of the current one), so a Bria window that they cover completely (e.g. behind a maximised Adobe
+        # Reader) is not an obstacle: the user cannot see it, the card must not step aside for it.
+        above, hidden = [], []
 
         def cb(hwnd, _lparam):
             try:
@@ -236,27 +260,43 @@ def find_obstacles(screen) -> list:
                     return True
                 pid = wintypes.DWORD()
                 _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                if pid.value == own_pid:
+                if pid.value == own_pid:                    # our cards / main window never hide or block anything
                     return True
-                exe = _exe_name(pid.value, cache)
-                if exe.lower() in ignore:
-                    return True
-                is_bria = bool(rx.search(exe))
-                if is_bria:
-                    if w >= 0.6 * (sr - sl):                # a maximised / huge Bria window: nothing to avoid
-                        return True
-                elif not (ex & _WS_EX_TOPMOST) or w > _NOTE_MAX_W or h > _NOTE_MAX_H:
-                    return True                             # ordinary app windows never count
                 _user32.GetClassNameW(hwnd, cls_buf, 64)
                 if cls_buf.value in _IGNORE_CLASSES or _cloaked(hwnd):
                     return True
-                out.append(((l, t, r, b), f"{exe or 'pid' + str(pid.value)} {w}x{h}"))
+                box = (l, t, r, b)
+                exe = _exe_name(pid.value, cache)
+                is_bria = bool(rx.search(exe))
+                obstacle = False
+                if exe.lower() in ignore:
+                    pass
+                elif is_bria:
+                    if w >= 0.6 * (sr - sl):                # a maximised / huge Bria window: nothing to avoid
+                        pass
+                    elif _fully_covered(box, above):        # rc.3: behind other windows, not visible
+                        hidden.append(f"{exe} {w}x{h}")
+                    else:
+                        obstacle = True
+                elif (ex & _WS_EX_TOPMOST) and w <= _NOTE_MAX_W and h <= _NOTE_MAX_H:
+                    obstacle = True                         # small topmost notification; other app windows never count
+                if obstacle:
+                    out.append((box, f"{exe or 'pid' + str(pid.value)} {w}x{h}"))
+                above.append(box)
             except Exception:
                 pass
             return True
 
         proc = _WNDENUMPROC(cb)                  # keep a reference for the duration of the call
         _user32.EnumWindows(proc, 0)
+        global _LAST_HIDDEN
+        if tuple(hidden) != _LAST_HIDDEN:
+            if hidden:                           # unverified on the live PC: this line shows it works
+                log.info("placement: hidden Bria window ignored: %s", ", ".join(hidden))
+            elif _LAST_HIDDEN:
+                log.info("placement: Bria window no longer hidden (or closed / minimised): %s",
+                         ", ".join(_LAST_HIDDEN))
+            _LAST_HIDDEN = tuple(hidden)
         return out
     except Exception:
         log.debug("find_obstacles failed", exc_info=True)
