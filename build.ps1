@@ -65,6 +65,7 @@ $extZip = "dist\CallCompanion-extension-$extVer.zip"
 Compress-Archive -Path "extension\*" -DestinationPath $extZip -Force
 Write-Host "OK: $extZip (Chrome Web Store package)"
 if (-not (Test-Path "$out\_internal\assets\app.ico")) { throw "assets were not bundled ($out\_internal\assets\app.ico missing)" }
+if (-not (Test-Path "$out\_internal\assets\whatsnew.md")) { throw "assets\whatsnew.md was not bundled (whats new window)" }
 Write-Host "OK: $out\CallCompanion.exe"
 
 if ($SkipInstaller) { Write-Host "`n-SkipInstaller: done."; return }

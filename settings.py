@@ -8,7 +8,8 @@ hand-edited file and an update never touches either of them.
       "dev_mode": false,
       "theme": "system",                (v0.10.0: dark | light | system)
       "call_in_window": true,           (v0.10.0-beta.3: a call shows in the active main window)
-      "extensions": [ {"number": "102", "name": "Kovács Péter"}, ... ]
+      "extensions": [ {"number": "102", "name": "Kovács Péter"}, ... ],
+      "last_seen_version": "1.1.0"      (v1.1.0: the "Újdonságok" window was shown for this version)
     }
 """
 from __future__ import annotations
@@ -85,6 +86,17 @@ class Settings(QObject):
         if bool(on) != self.call_in_window:
             self._data["call_in_window"] = bool(on)
             log.info("call in main window: %s", "on" if on else "off")
+            self._save()
+
+    @property
+    def last_seen_version(self) -> str | None:
+        """v1.1.0: the version whose "Újdonságok" were last shown (None: never, e.g. updated from 1.0.x)."""
+        v = self._data.get("last_seen_version")
+        return str(v) if v else None
+
+    def set_last_seen_version(self, version: str) -> None:
+        if version and version != self.last_seen_version:
+            self._data["last_seen_version"] = str(version)
             self._save()
 
     @property

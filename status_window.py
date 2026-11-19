@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 import icons
 import theme
 from call_panel import CallPanel
+from events import ANONYMOUS_LABEL, is_anonymous
 from version import EXTENSION_STORE_URL
 
 log = logging.getLogger("callcompanion.status")
@@ -54,9 +55,10 @@ HEALTH_COLOR = {Health.OK: "green", Health.WARN: "yellow", Health.ERROR: "red", 
 
 STATUS_HU = {"ringing": "Csörög", "answered": "Folyamatban", "hold": "Tartva", "ended": "Befejezve",
              "missed": "Nem fogadott", "rejected": "Elutasítva", "unanswered": "Nem vették fel",
-             "elsewhere": "Máshol fogadták", "transferred": "Átkapcsolva"}
+             "elsewhere": "Máshol fogadták", "transferred": "Átkapcsolva", "forwarded": "Továbbment"}
 STATUS_COLOR = {"ringing": "green", "answered": "blue", "hold": "peach", "ended": "subtext", "missed": "red",
-                "rejected": "yellow", "unanswered": "subtext", "elsewhere": "subtext", "transferred": "mauve"}
+                "rejected": "yellow", "unanswered": "subtext", "elsewhere": "subtext", "transferred": "mauve",
+                "forwarded": "subtext"}
 
 
 @dataclass
@@ -272,6 +274,22 @@ class StatusModel(QObject):
                 rec.status = status
             self._commit(rec)
 
+    def mark_reached(self, number: str, except_id: str, note: str, hours: int = 48) -> int:
+        """v1.1.0: missed calls from `number` in the last `hours` (in memory) get `note` once the caller was reached.
+        Returns how many rows changed."""
+        cutoff = datetime.now() - timedelta(hours=hours)
+        n = 0
+        for rec in self.calls:
+            if (rec.call_id != except_id and rec.number == number and rec.status == "missed" and not rec.note
+                    and rec.started >= cutoff):
+                rec.note = note
+                if self.store is not None:
+                    self.store.save(rec)
+                n += 1
+        if n:
+            self.changed.emit()
+        return n
+
     def call_ended(self, call_id: str, rejected: bool = False, outcome: str | None = None,
                    duration_s: int = 0) -> None:
         """`outcome` (missed / rejected / unanswered / elsewhere) names how a call that was never answered ended."""
@@ -349,6 +367,16 @@ def day_label(d: date, today: date | None = None) -> str:
     return f"{d.year}. {MONTHS_HU[d.month - 1]} {d.day}., {wd}"
 
 
+def day_header_label(d: date, today: date | None = None) -> str:
+    """v1.1.0 day header in the history: "Ma · november 19., csütörtök", "Tegnap · november 18., szerda", older days
+    as day_label (they already carry the date)."""
+    today = today or date.today()
+    label = day_label(d, today)
+    if label in ("Ma", "Tegnap"):
+        return f"{label} · {MONTHS_HU[d.month - 1]} {d.day}., {WEEKDAYS_HU[d.weekday()]}"
+    return label
+
+
 MONTHS_SHORT_HU = ("jan.", "febr.", "márc.", "ápr.", "máj.", "jún.", "júl.", "aug.", "szept.", "okt.", "nov.",
                    "dec.")
 
@@ -381,6 +409,8 @@ def date_range(key: str, today: date | None = None) -> tuple[datetime | None, da
 
 def caller_title(c: CallRecord) -> tuple[str, str]:
     """(text, colour role) of the first line."""
+    if is_anonymous(c.number):                  # v1.1.0: withheld number (older rows were saved as "000")
+        return ANONYMOUS_LABEL, "subtext"
     if c.name:
         return c.name, "text"
     if c.lookup == "pending":
@@ -435,7 +465,7 @@ class CallDelegate(QStyledItemDelegate):
     always green), on row hover all get a soft background, the hovered one a stronger one and a tooltip. An empty
     slot keeps its place (no MiniCRM profile, a number that cannot be dialled back). Clicks are handled here
     (editorEvent), so a row needs no widgets and no selection to act."""
-    H, HH = 62, 36                    # call row / day header height
+    H, HH = 62, 44                    # call row / day header height (v1.1.0: taller, stronger header band)
     BTN, BTN_GAP, TIME_W = 32, 2, 76     # v0.10.0-beta.3: the column also holds the day (Tegnap, nov. 10.)
     NARROW = 480                      # below this row width the company tag moves to line 2
     action = Signal(object, str)      # CallRecord, "callback" | "crm" | "copy" | "google"
@@ -465,7 +495,7 @@ class CallDelegate(QStyledItemDelegate):
             return self.can_dial and dialable(c.number)
         if kind == "crm":
             return bool(c.profile_url)
-        return bool(c.number)
+        return bool(c.number) and not is_anonymous(c.number)
 
     def action_rects(self, r: QRect, c: CallRecord) -> dict:
         """kind -> QRect of the visible row actions; a hidden one leaves its slot empty."""
@@ -533,34 +563,47 @@ class CallDelegate(QStyledItemDelegate):
             self._paint_call(p, option, index, data)
 
     def _paint_header(self, p: QPainter, option, h: DayHeader):
+        """v1.1.0 (user request 2026-11-19): a clear band per day - tinted background with a lavender accent bar,
+        the day with its date in bold 14 px on the left, "12 hívás · 2 nem fogadott" on the right."""
         p.save()
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        r = option.rect.adjusted(4, 8, -4, -2)
+        r = option.rect.adjusted(2, 10, -2, -2)
         pal = theme.palette()
-        if option.state & QStyle.StateFlag.State_MouseOver:
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(pal.row_hover if pal.light else pal.surface))
-            p.drawRoundedRect(r, 8, 8)
-        x = r.left() + 8
+        hover = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(theme.qcolor("lavender", (34 if hover else 22) if pal.light else (46 if hover else 30)))
+        p.drawRoundedRect(QRectF(r), 8, 8)
+        p.setBrush(theme.qcolor("lavender", 200))
+        p.drawRoundedRect(QRectF(r.left() + 1, r.top() + 7, 3, r.height() - 14), 1.5, 1.5)
+        x = r.left() + 12
         icons.paint(p, "chev_down" if h.expanded else "chev_right",
-                    QRectF(x, r.center().y() - 6.5, 14, 14), "subtext")
-        x += 20
-        parts = [(h.label, pal.text, True), (f"{h.count} hívás", pal.subtext, False)]
+                    QRectF(x, r.center().y() - 7, 14, 14), "text")
+        x += 22
+        # right side: counts (never squeezed below the day label's minimum)
+        cf = _font(12)
+        cfm = QFontMetrics(cf)
+        parts = [(f"{h.count} hívás", pal.subtext)]
         if h.missed:
-            parts.append((f"{h.missed} nem fogadott", pal.missed_text, False))
-        for i, (txt, col, bold) in enumerate(parts):
+            parts.append((f"{h.missed} nem fogadott", pal.missed_text))
+        sep_w = 16
+        counts_w = sum(cfm.horizontalAdvance(t) for t, _c in parts) + sep_w * (len(parts) - 1)
+        cx = r.right() - 12 - counts_w
+        lf = _font(14, QFont.Weight.Bold)
+        lfm = QFontMetrics(lf)
+        p.setFont(lf)
+        p.setPen(QColor(pal.text))
+        label = lfm.elidedText(h.label, Qt.TextElideMode.ElideRight, max(40, cx - 12 - x))
+        p.drawText(QRect(x, r.top(), max(40, cx - 12 - x), r.height()), Qt.AlignmentFlag.AlignVCenter, label)
+        p.setFont(cf)
+        for i, (txt, col) in enumerate(parts):
             if i:
                 p.setPen(QColor(pal.overlay))
-                p.setFont(_font(12))
-                p.drawText(QRect(x, r.top(), 16, r.height()), Qt.AlignmentFlag.AlignCenter, "·")
-                x += 16
-            f = _font(12, QFont.Weight.DemiBold if bold else QFont.Weight.Normal)
-            p.setFont(f)
+                p.drawText(QRect(cx, r.top(), sep_w, r.height()), Qt.AlignmentFlag.AlignCenter, "·")
+                cx += sep_w
             p.setPen(QColor(col))
-            fm = QFontMetrics(f)
-            t = fm.elidedText(txt, Qt.TextElideMode.ElideRight, max(0, r.right() - 8 - x))
-            p.drawText(QRect(x, r.top(), r.right() - x, r.height()), Qt.AlignmentFlag.AlignVCenter, t)
-            x += fm.horizontalAdvance(t)
+            w = cfm.horizontalAdvance(txt)
+            p.drawText(QRect(cx, r.top(), w + 2, r.height()), Qt.AlignmentFlag.AlignVCenter, txt)
+            cx += w
         p.restore()
 
     def _paint_call(self, p: QPainter, option, index, c: CallRecord):
@@ -570,9 +613,10 @@ class CallDelegate(QStyledItemDelegate):
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         hover = bool(option.state & QStyle.StateFlag.State_MouseOver)
         missed = c.status == "missed"
+        open_missed = missed and not c.note            # v1.1.0: a reached caller (note) loses the burgundy tint
         pal = theme.palette()
         bg = QColor(pal.row_sel if selected else (pal.row_hover if hover else pal.row))
-        if missed and not selected:
+        if open_missed and not selected:
             bg = QColor(pal.row_missed_hover if hover else pal.row_missed)     # quiet burgundy tint
         if pal.edge != "transparent":                                     # light: white rows with a thin border
             p.setPen(QPen(QColor(pal.edge), 1))
@@ -583,7 +627,7 @@ class CallDelegate(QStyledItemDelegate):
             p.setBrush(bg)
             p.drawRoundedRect(r, 10, 10)
         p.setPen(Qt.PenStyle.NoPen)
-        if missed:
+        if open_missed:
             p.setBrush(QColor(pal.burgundy))
             p.drawRoundedRect(QRect(r.left(), r.top() + 8, 4, r.height() - 16), 2, 2)
 
@@ -649,7 +693,9 @@ class CallDelegate(QStyledItemDelegate):
                 self._paint_tag(p, QRect(x, y2, tw, 18), company, cf, cfm)
                 x += tw + 8
         parts = []
-        if c.name or c.lookup not in ("pending", "failed"):
+        if is_anonymous(c.number):
+            parts.append(("Letiltott számkijelzés", "subtext"))
+        elif c.name or c.lookup not in ("pending", "failed"):
             parts.append((c.number, "subtext"))
         elif c.lookup == "failed":
             parts.append(("MiniCRM: jelentkezz be" if "expired" in (c.detail or "") else "Keresés sikertelen",
@@ -660,7 +706,7 @@ class CallDelegate(QStyledItemDelegate):
         if c.duration_s:
             parts.append((_fmt_duration(c.duration_s), "subtext"))
         if c.note:
-            parts.append((c.note, "mauve"))
+            parts.append((c.note, "green" if missed else "mauve"))
         sf = _font(12)
         sfm = QFontMetrics(sf)
         p.setFont(sf)
@@ -745,6 +791,7 @@ class CallDelegate(QStyledItemDelegate):
 class MainWindow(QWidget):
     """Normal user window: plain status + call history. Signals are wired in main.py."""
     open_settings = Signal()            # v0.9.0: ⚙ gear (Beállítások: Mellékek, Megjelenés, Fejlesztői mód, Névjegy)
+    open_feedback = Signal()            # v1.1.0: Visszajelzés (feedback.py)
     callback_requested = Signal(object)  # v0.10.0-beta.2: Visszahívás from a history row (CallRecord)
     relookup_requested = Signal(object)  # v1.0.0-rc.2: right-click Újrakeresés on an unknown number (CallRecord)
 
@@ -817,6 +864,13 @@ class MainWindow(QWidget):
         self.gear.setToolTip("Beállítások")
         self.gear.setCursor(Qt.CursorShape.PointingHandCursor)
         self.gear.clicked.connect(self.open_settings.emit)
+        # v1.1.0: Visszajelzés (hiba / ötlet) next to the gear
+        self.fb_btn = QPushButton("", objectName="gear")
+        self.fb_btn.setIconSize(QSize(18, 18))
+        self.fb_btn.setToolTip("Visszajelzés küldése (hiba, ötlet)")
+        self.fb_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.fb_btn.clicked.connect(self.open_feedback.emit)
+        cl.addWidget(self.fb_btn, 0, Qt.AlignmentFlag.AlignTop)
         cl.addWidget(self.gear, 0, Qt.AlignmentFlag.AlignTop)
         root.addWidget(card)
 
@@ -834,6 +888,12 @@ class MainWindow(QWidget):
         drow.setSpacing(2)
         self._date_btns = self._pills(drow, self.DATE_FILTERS, "any", self._set_date)
         drow.addStretch(1)
+        self._days: list[date] = []             # v1.1.0: days of the current list (for Mind összecsuk / kinyit)
+        self.fold_btn = QPushButton("Mind összecsuk", objectName="seg")
+        self.fold_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.fold_btn.setIconSize(QSize(13, 13))
+        self.fold_btn.clicked.connect(self._toggle_all)
+        drow.addWidget(self.fold_btn)
         root.addLayout(drow)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Keresés név, cég vagy telefonszám alapján…")
@@ -994,9 +1054,12 @@ class MainWindow(QWidget):
     def _apply_icons(self) -> None:
         """v0.10.0-beta.2 drawn icons (rebuilt on a theme switch: their colours come from the palette)."""
         self.gear.setIcon(icons.icon("gear", "subtext", 18))
+        self.fb_btn.setIcon(icons.icon("feedback", "subtext", 18))
         if self.report_btn.objectName() != "done":
             self.report_btn.setIcon(icons.icon("copy", "text", 15))
         self._search_act.setIcon(icons.icon("search", "subtext", 15, disabled=None))
+        if hasattr(self, "fold_btn"):
+            self._update_fold_btn()
 
     def set_dial_state(self, can_dial: bool, in_call: bool) -> None:
         """Visszahívás: offered when Bria control is on; disabled while a call rings / runs (main.py)."""
@@ -1047,7 +1110,8 @@ class MainWindow(QWidget):
             if self._type == "missed" and c.status != "missed":
                 continue
             if q:
-                hay = " ".join(filter(None, (c.name, c.company, c.number, c.note))).lower()
+                hay = " ".join(filter(None, (c.name, c.company, c.number, c.note,
+                                             ANONYMOUS_LABEL if is_anonymous(c.number) else ""))).lower()
                 digits = "".join(ch for ch in c.number if ch.isdigit())
                 if q not in hay and not (len(qd) >= 3 and qd[-9:] in digits):
                     continue
@@ -1070,13 +1134,15 @@ class MainWindow(QWidget):
         groups: dict[date, list[CallRecord]] = {}
         for c in calls:
             groups.setdefault(c.started.date(), []).append(c)
+        self._days = list(groups)
+        self._update_fold_btn(today)
         self.list.setUpdatesEnabled(False)
         self.list.clear()
         sel = -1
         for d, items in groups.items():
             exp = self._expanded(d, today)
             hi = QListWidgetItem()
-            hi.setData(ROLE, DayHeader(d, day_label(d, today), len(items),
+            hi.setData(ROLE, DayHeader(d, day_header_label(d, today), len(items),
                                        sum(1 for c in items if c.status == "missed"), exp))
             hi.setFlags(Qt.ItemFlag.ItemIsEnabled)
             hi.setToolTip("Kattintás: " + ("összecsukás" if exp else "kinyitás"))
@@ -1125,6 +1191,27 @@ class MainWindow(QWidget):
     def _set_date(self, key: str) -> None:
         self._date = key
         self._filters_changed()
+
+    # ---- v1.1.0: fold / unfold every day at once (folded: a plain list of the days with their counts) ----
+    def _any_open(self, today: date | None = None) -> bool:
+        today = today or date.today()
+        return any(self._expanded(d, today) for d in self._days)
+
+    def _update_fold_btn(self, today: date | None = None) -> None:
+        any_open = self._any_open(today)
+        self.fold_btn.setText("Mind összecsuk" if any_open else "Mind kinyit")
+        self.fold_btn.setIcon(icons.icon("chev_right" if any_open else "chev_down", "text"))
+        self.fold_btn.setToolTip("Minden nap összecsukása: csak a napok látszanak, a hívások számával"
+                                 if any_open else "Minden nap kinyitása")
+        self.fold_btn.setEnabled(bool(self._days))
+
+    def _toggle_all(self) -> None:
+        target = not self._any_open()
+        store = self._open_f if self._filtering() else self._open
+        for d in self._days:
+            store[d] = target
+        self.list.verticalScrollBar().setValue(0)
+        self.refresh()
 
     def _item_clicked(self, item) -> None:
         h = item.data(ROLE)
@@ -1245,11 +1332,12 @@ def _demo() -> int:
                ("Kovács Péter", "Nagyon Hosszú Nevű Építőipari és Kereskedelmi Kft.", "+36201112233", "ended", 62,
                 "out"),
                ("Nagy Éva", None, "+36705554433", "missed", 0, "in"),
-               ("Szabó Gábor", "Minta Bt.", "+36309998877", "rejected", 0, "in")]
+               ("Szabó Gábor", "Minta Bt.", "+36309998877", "rejected", 0, "in"),
+               (None, None, "anonymous", "missed", 0, "in")]               # v1.1.0: withheld number
     now = datetime.now()
     n = 0
     for days in (0, 0, 1, 1, 2, 4, 9, 16, 30):
-        for i, (name, company, number, status, dur, direction) in enumerate(samples[: 2 + days % 4]):
+        for i, (name, company, number, status, dur, direction) in enumerate(samples[: 2 + days % 5]):
             n += 1
             rec = CallRecord(f"d{n}", number, now - timedelta(days=days, minutes=37 * i + 5), status=status,
                              name=name, lookup="found" if name else "unknown", direction=direction,
@@ -1257,6 +1345,10 @@ def _demo() -> int:
                              profile_url="https://r3.minicrm.hu/" if name else None)
             model.calls.append(rec)
     model.calls.sort(key=lambda c: c.started, reverse=True)
+    for c in model.calls:                        # v1.1.0: a missed caller who was reached later
+        if c.name == "Nagy Éva" and c.status == "missed":
+            c.note = "Visszahívva"
+            break
     win = MainWindow(model, "demo")
     win.prepare_quit()
 
@@ -1265,6 +1357,11 @@ def _demo() -> int:
         SettingsDialog(st, "demo", update_state=lambda: "Up to date (demo)", check_updates=lambda: None,
                        set_dev_mode=lambda on: None, parent=win).exec()
     win.open_settings.connect(open_settings)
+
+    def open_feedback():                         # v1.1.0 preview (nothing is sent without FEEDBACK_ENDPOINT)
+        from feedback import FeedbackDialog
+        FeedbackDialog("demo", model.report_text("demo"), "app.log").exec()
+    win.open_feedback.connect(open_feedback)
     win.set_dial_state(True, False)              # preview: Visszahívás only confirms, nothing is dialled
     win.callback_requested.connect(lambda c: win.callback_result(c.call_id, True))
     win.show_and_raise()

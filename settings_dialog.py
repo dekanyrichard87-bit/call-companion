@@ -154,8 +154,9 @@ class SettingsDialog(QDialog):
     THEMES = (("dark", "Sötét"), ("light", "Világos"), ("system", "Rendszer szerint"))
 
     def __init__(self, settings, version: str, update_state=lambda: "", check_updates=None,
-                 set_dev_mode=None, open_dev_tools=None, parent=None, page: str = "ext"):
+                 set_dev_mode=None, open_dev_tools=None, parent=None, page: str = "ext", license_text: str = ""):
         super().__init__(parent)
+        self._license_text = license_text           # v1.1.0: licence preparation (Névjegy line only)
         self.settings = settings
         self._update_state = update_state
         self._check_updates = check_updates
@@ -309,6 +310,11 @@ class SettingsDialog(QDialog):
         cp = QLabel(COPYRIGHT)
         theme.set_tone(cp, "subtext")
         lay.addWidget(cp)
+        if self._license_text:
+            lic = QLabel(f"Licenc: {self._license_text}" if not self._license_text.startswith("Licenc")
+                         else self._license_text)
+            theme.set_tone(lic, "subtext")
+            lay.addWidget(lic)
         lay.addSpacing(14)
         self.upd_label = self._hint("")
         lay.addWidget(self.upd_label)

@@ -59,6 +59,10 @@ DEFAULTS = {
             #   "RESIP:TRANSPORT | ... incoming from: [ V4 ip:port UDP ... ]"  /  "... Transmitting to [ ... ]"
             "incoming_regex": "(?i)incoming from",
             "outgoing_regex": "(?i)Transmitting to",
+            # v1.1.0: "továbbment" instead of "nem fogadott" when the PBX passes an unanswered call to another
+            # extension. Both off by default (the PBX's CANCEL Reason is not verified yet; see the "cancel:" log lines):
+            "forwarded_reason_regex": "",     # e.g. "(?i)cause=480" once the live test shows the Reason header
+            "forwarded_after_s": 0,           # > 0: an incoming call cancelled after ringing this many seconds
         },
     },
     "ui": {
@@ -70,6 +74,9 @@ DEFAULTS = {
         "bria_toast": "auto",                 # auto = keep Bria's toast area free while a call rings | off
         "toast_reserve_w": 380,               # that area, from the bottom-right corner of the work area
         "toast_reserve_h": 230,
+        # v1.1.0: missed-call cards: the newest `missed_full` are full size, older ones fold to two lines
+        "missed_full": 2,
+        "missed_max": 6,
         "bria_process_regex": "(?i)bria",     # Bria's program file name (its main window is avoided)
         # placement "fixed" only (the behaviour before 0.9.0):
         "overlay_position": "bottom_right",   # bottom_right | bottom_left | top_right | top_left

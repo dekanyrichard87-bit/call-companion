@@ -112,6 +112,16 @@ class BriaLogDetector(threading.Thread):
         self._ctx = collections.deque(maxlen=2)
         self._in = re.compile(cfg["incoming_regex"])
         self._out = re.compile(cfg["outgoing_regex"])
+        # v1.1.0: a call the PBX passes on to another extension (no answer on 101 -> rings on 102) must not stay a
+        # missed call here. UNVERIFIED which Reason header the PBX sends then; both rules are off by default and
+        # every CANCEL is logged ("cancel: ...") so the live test shows what to match.
+        rx = str(cfg.get("forwarded_reason_regex") or "").strip()
+        self._fwd_rx = re.compile(rx) if rx else None
+        try:
+            self._fwd_after = max(0.0, float(cfg.get("forwarded_after_s") or 0))
+        except (TypeError, ValueError):
+            self._fwd_after = 0.0
+        self.rang_at: dict[str, float] = {}  # call id -> time.monotonic() of the INVITE (ring time of a CANCEL)
 
     def stop(self):
         self._stop_evt.set()
@@ -232,8 +242,19 @@ class BriaLogDetector(threading.Thread):
         b["done"] = True
         cid = b["callid"]
         if cid in self.calls:
-            elsewhere = "elsewhere" in b["reason"] or "cause=200" in b["reason"]
-            self._end(cid, "elsewhere" if elsewhere else "cancel")
+            reason = b["reason"]
+            ring = time.monotonic() - self.rang_at.get(cid, time.monotonic())
+            elsewhere = "elsewhere" in reason or "cause=200" in reason
+            if elsewhere:
+                outcome = "elsewhere"
+            elif self._fwd_rx is not None and self._fwd_rx.search(reason):
+                outcome = "forwarded"
+            elif self._fwd_after and self.dirs.get(cid) == "in" and ring >= self._fwd_after:
+                outcome = "forwarded"
+            else:
+                outcome = "cancel"
+            log.info("cancel: call %s rang %.1f s, Reason=%r -> %s", cid, ring, reason or "", outcome)
+            self._end(cid, outcome)
 
     def flush_idle(self):
         """Called when the log has been quiet for a moment: a CANCEL at the very end of the log is reported."""
@@ -241,6 +262,7 @@ class BriaLogDetector(threading.Thread):
 
     def _end(self, cid: str, reason: str):
         number, direction = self.calls.pop(cid), self.dirs.pop(cid, "in")
+        self.rang_at.pop(cid, None)
         self.answered.discard(cid)
         self.emit(CallEvent("ended", cid, number, "bria-log", direction, reason))
 
@@ -257,6 +279,9 @@ class BriaLogDetector(threading.Thread):
                 number = normalize_number(party)
                 direction = "in" if b["incoming"] else "out"
                 self.calls[cid], self.dirs[cid] = number, direction
+                self.rang_at[cid] = time.monotonic()
+                while len(self.rang_at) > 100:                   # calls whose end was never seen
+                    self.rang_at.pop(next(iter(self.rang_at)))
                 self.emit(CallEvent("ringing", cid, number, "bria-log", direction))
         elif meth == "CANCEL":
             return                       # reported by _flush_cancel() when the headers are complete

@@ -51,6 +51,11 @@ SHAPES = {
     "transfer": ('<path d="M4 5v6a3 3 0 0 0 3 3h12"/><path d="M15 10l4 4-4 4"/>', 1.8),
     "pencil":  ('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>', 1.8),
     "code":    ('<path d="M8 8l-4 4 4 4"/><path d="M16 8l4 4-4 4"/>', 1.8),
+    # v1.1.0: Visszajelzés (speech bubble) and Újdonságok (sparkle)
+    "feedback": ('<path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8l-4.5 3.5V17H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/>'
+                 '<path d="M8 10h8"/><path d="M8 13.5h5"/>', 1.8),
+    "sparkle": ('<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 16v4"/>'
+                '<path d="M17 18h4"/>', 1.8),
     "gear":    ('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1'
                 'a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0'
                 '-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7'
@@ -61,7 +66,7 @@ SHAPES = {
 LETTERS = {"crm": ("M", "square"), "google": ("G", "circle")}      # drawn letter marks
 FALLBACK = {"phone": "📞", "hangup": "✕", "pause": "⏸", "play": "▶", "copy": "📋", "check": "✓", "close": "✕",
             "missed": "✕", "arrow_in": "↙", "arrow_out": "↗", "chev_down": "▾", "chev_right": "▸", "chev_up": "▲",
-            "search": "🔍", "transfer": "↪", "pencil": "✎", "code": "</>", "gear": "⚙", "crm": "M", "google": "G"}
+            "search": "🔍", "transfer": "↪", "pencil": "✎", "code": "</>", "gear": "⚙", "feedback": "✉", "sparkle": "✦", "crm": "M", "google": "G"}
 NAMES = tuple(SHAPES) + tuple(LETTERS)
 
 _RENDERERS: dict = {}

@@ -13,14 +13,17 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from shiboken6 import isValid   # ships with PySide6: False once the C++ side of a widget is deleted
 
 import config
+import licensing
 import theme
 import updater
+import whatsnew
+from feedback import FeedbackDialog
 from bria_api import BriaApi, BriaApiError
 from crm import NO_SESSION, SESSION_EXPIRED, CallerInfo, MiniCrmClient
 from detectors import BriaLogDetector
 from dev_window import DevWindow
 from settings_dialog import SettingsDialog
-from events import CallEvent, normalize_number
+from events import CallEvent, is_anonymous, normalize_number
 from history import HistoryStore
 from local_api import LocalApi
 from overlay import CallOverlay
@@ -380,7 +383,8 @@ class Controller(QObject):
         for cid, old in list(self.missed.items()):
             if not isValid(old):
                 del self.missed[cid]
-            elif ov.number and old.number == ov.number:
+            elif ov.number and old.number == ov.number and not is_anonymous(ov.number):
+                # (v1.1.0: two withheld numbers are not the same caller)
                 count += old.missed_count
                 del self.missed[cid]
                 old.end()
@@ -388,13 +392,31 @@ class Controller(QObject):
         self.missed[call_id] = ov
         ov.set_callback(self.bria_api.enabled and dialable(ov.number), blocked=False)
         ov.set_missed(count, when)
-        limit = max(1, int(self.cfg["ui"].get("missed_max", 4)))     # the stack must fit on the screen
+        limit = max(1, int(self.cfg["ui"].get("missed_max", 6)))     # the stack must fit on the screen
         while len(self.missed) > limit:
             old = self.missed.pop(next(iter(self.missed)))
             if isValid(old):
                 old.end()
 
+    def _reached(self, ev: CallEvent):
+        """v1.1.0: a call with a number that has missed calls was answered (they called again and we picked up, or
+        we called them back and they picked up): the missed cards of that number go, the history rows get a note."""
+        if not ev.number or is_anonymous(ev.number):
+            return
+        text, note = ("VISSZAHÍVVA", "Visszahívva") if ev.direction == "out" else ("ÚJRA HÍVOTT · FELVETTED",
+                                                                                  "Újra hívott, felvetted")
+        n = 0
+        for cid, card in list(self.missed.items()):
+            if cid != ev.call_id and isValid(card) and card.number == ev.number:
+                card.resolve(text)
+                n += 1
+        rows = self.status.mark_reached(ev.number, ev.call_id, note)
+        if n or rows:
+            log.info("call %s reached a missed caller: %d card(s) closed, %d history row(s) marked",
+                     ev.call_id, n, rows)
+
     END_TEXT = {None: "HÍVÁS BEFEJEZVE", "rejected": "ELUTASÍTVA", "elsewhere": "MÁSHOL FOGADTÁK",
+                "forwarded": "TOVÁBBMENT",
                 "unanswered": "NEM VETTÉK FEL", "missed": "NEM FOGADOTT HÍVÁS"}
 
     @staticmethod
@@ -404,7 +426,8 @@ class Controller(QObject):
             return None
         if meta.get("dir") == "out":
             return "unanswered"
-        return {"rejected": "rejected", "failed": "rejected", "elsewhere": "elsewhere"}.get(ev.reason, "missed")
+        return {"rejected": "rejected", "failed": "rejected", "elsewhere": "elsewhere",
+                "forwarded": "forwarded"}.get(ev.reason, "missed")
 
     def _drop_overlay(self):
         ov, self.overlay = self.overlay, None
@@ -434,6 +457,7 @@ class Controller(QObject):
         if ev.kind == "answered":
             if not meta.get("answered"):
                 meta["answered_at"] = time.monotonic()
+                self._reached(ev)
             meta["answered"] = True
             self.status.call_answered(ev.call_id)
         elif ev.kind == "ended":
@@ -461,8 +485,12 @@ class Controller(QObject):
             if in_panel:
                 self.panel_host.show_call(ov)
                 log.info("panel: call %s in main window (%s)", ev.call_id, "out" if ev.direction == "out" else "in")
-            fut = self.pool.submit(self._safe_lookup, ev.number)
-            fut.add_done_callback(lambda f, cid=ev.call_id: self.lookup_sig.emit(cid, f.result()))
+            if is_anonymous(ev.number):
+                # v1.1.0: withheld number: nothing to look up (the card says "Rejtett szám")
+                self.status.call_resolved(ev.call_id, None, None, "unknown", "anonymous")
+            else:
+                fut = self.pool.submit(self._safe_lookup, ev.number)
+                fut.add_done_callback(lambda f, cid=ev.call_id: self.lookup_sig.emit(cid, f.result()))
             self._maybe_check_transfer()
         elif ev.call_id == self.current_id:
             ov = self._live_overlay()
@@ -758,9 +786,22 @@ def simulate(ctl: Controller, raw_number: str, scenario: str = "answered"):
             CallEvent(kind, cid, n, "sim", direction, reason)))
 
 
+def demo_missed(ctl: Controller):
+    """v1.1.0 preview (--demo-missed, ~55 s): four missed calls (one with a withheld number), a repeated one (x2),
+    then the second caller calls again and is answered -> its missed card closes ("ÚJRA HÍVOTT · FELVETTED")."""
+    plan = [(0, "+36301111111", "missed"), (8000, "+36302222222", "missed"), (16000, "000anonymous", "missed"),
+            (24000, "+36303333333", "missed"), (32000, "+36301111111", "missed"),
+            (42000, "+36302222222", "answered")]
+    for delay, number, scenario in plan:
+        QTimer.singleShot(delay, lambda n=number, sc=scenario: simulate(ctl, n, sc))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--simulate", metavar="NUMBER", help="fake a call: ring -> answer -> end")
+    ap.add_argument("--demo-missed", action="store_true",
+                    help="v1.1.0 preview: several missed calls (folding, withheld number, caller reached)")
+    ap.add_argument("--whatsnew", action="store_true", help="v1.1.0 preview: open the Újdonságok window")
     ap.add_argument("--probe-bria", nargs="?", const=90, type=int, metavar="SECONDS",
                     help="capture Bria log lines during a test call into bria_probe.txt")
     ap.add_argument("--show", action="store_true", help="open the status window at startup")
@@ -814,6 +855,8 @@ def main():
     icon = make_icon()
     app.setWindowIcon(icon)
     hist_cfg = cfg.get("history") or {}
+    existing_user = (config.data_dir() / "history.db").exists()    # v1.1.0: updated (not a fresh install)
+    lic = licensing.check(config.data_dir())                        # v1.1.0: preparation only, never restricts
     store = HistoryStore(config.data_dir() / "history.db", hist_cfg.get("retention_days", 90),
                          hist_cfg.get("max_rows", 2000))
     settings = Settings(config.data_dir() / "settings.json")
@@ -866,6 +909,9 @@ def main():
             upd.triggered.connect(lambda: updates.check(manual=True))
             upd.setToolTip(updates.state_text)
         menu.addSeparator()
+        menu.addAction("Újdonságok").triggered.connect(lambda: show_whatsnew(whatsnew.load()[:3]))
+        menu.addAction("Visszajelzés küldése…").triggered.connect(open_feedback)
+        menu.addSeparator()
         menu.addAction("Kilépés").triggered.connect(quit_app)
 
     def set_dev_mode(on: bool):
@@ -878,9 +924,34 @@ def main():
     def open_settings():
         SettingsDialog(settings, __version__, update_state=lambda: updates.state_text,
                        check_updates=lambda: updates.check(manual=True), set_dev_mode=set_dev_mode,
-                       open_dev_tools=dev.show_and_raise, parent=win).exec()
+                       open_dev_tools=dev.show_and_raise, parent=win, license_text=lic.text).exec()
+
+    dialogs = []                                          # v1.1.0: keeps the non-modal dialogs alive
+
+    def _keep(dlg):
+        dialogs[:] = [d for d in dialogs if isValid(d)] + [dlg]
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def open_feedback():
+        _keep(FeedbackDialog(__version__, ctl.status.report_text(__version__), config.data_dir() / "app.log", cfg))
+
+    def show_whatsnew(sections):
+        if sections:
+            _keep(whatsnew.WhatsNewDialog(sections, __version__))
+
+    def startup_whatsnew(tries: int = 0):
+        """v1.1.0: once after an update, a few seconds after the start and never over a ringing / running call."""
+        if ctl.in_call() and tries < 60:
+            QTimer.singleShot(30_000, lambda: startup_whatsnew(tries + 1))
+            return
+        show_whatsnew(todo)
+        settings.set_last_seen_version(__version__)
+        log.info("whatsnew: shown %s", ", ".join(v for v, _b in todo))
 
     win.open_settings.connect(open_settings)              # v0.9.0: ⚙ gear in the main window
+    win.open_feedback.connect(open_feedback)              # v1.1.0
     win.callback_requested.connect(lambda c: ctl.call_back("row", c.call_id, c.number, c.name or ""))
     win.relookup_requested.connect(ctl.relookup)          # v1.0.0-rc.2: right click on an unknown number
     ctl.row_dial_sig.connect(win.callback_result)
@@ -901,6 +972,13 @@ def main():
     ctl.start_services()
     ctl.check_session()
     updates.start()
+    # v1.1.0 Újdonságok: a copy updated from 1.0.x has no last_seen_version yet (it has a history database)
+    last_seen = settings.last_seen_version or ("1.0.0" if existing_user else __version__)
+    todo = whatsnew.pending(whatsnew.load(), last_seen, __version__)
+    if todo:
+        QTimer.singleShot(4_000, startup_whatsnew)
+    else:
+        settings.set_last_seen_version(__version__)
     if args.after_install:
         QTimer.singleShot(1_500, lambda: tray.showMessage(
             "Call Companion", f"A {__version__} verzió fut. Kattintson a tálcaikonra az állapothoz és a hívásokhoz.",
@@ -909,6 +987,10 @@ def main():
         QTimer.singleShot(300, win.show_and_raise)
     if args.simulate:
         QTimer.singleShot(600, lambda: simulate(ctl, args.simulate))
+    if args.demo_missed:
+        QTimer.singleShot(600, lambda: demo_missed(ctl))
+    if args.whatsnew:
+        QTimer.singleShot(800, lambda: show_whatsnew(whatsnew.load()[:3]))
     code = app.exec()
     lock.unlock()
     sys.exit(code)

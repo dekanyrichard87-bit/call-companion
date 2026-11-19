@@ -51,15 +51,18 @@ import config
 import icons
 import theme
 from crm import CallerInfo
+from events import ANONYMOUS_LABEL, is_anonymous
 
 log = logging.getLogger("overlay")
 
 UNKNOWN_CALLER = "Ismeretlen hívó"
+ANONYMOUS_HINT = "A hívó letiltotta a számkijelzést"
 
 # v0.10.0: the card's style sheet is theme.qss_card() (dark / light, re-applied to open cards on a switch).
 
 
 _STACK: list = []          # every CallOverlay that was placed; pruned when its Qt object is gone
+_RING_HIDDEN: list = []    # v1.1.0: incoming calls ringing in the main window's call panel (Bria's toast is still up)
 _SEQ = itertools.count(1)  # creation order, so the newest missed card can sit nearest to the bottom
 GLOW = 6                   # transparent margin around the card for the pulsing glow (px on each side)
 STACK_GAP = 2              # gap between two card windows; the visible gap is STACK_GAP + 2 * GLOW
@@ -90,6 +93,7 @@ _PLACEMENT = {
     "bria_toast": "auto",    # auto = reserve the toast area while an incoming call rings | off (toast switched off)
     "toast_w": 380,          # reserved area, logical px from the bottom-right corner of the work area
     "toast_h": 230,
+    "missed_full": 2,        # v1.1.0: newest missed cards shown full size; older ones fold to two lines
     "ignore": ["explorer.exe", "ShellExperienceHost.exe", "StartMenuExperienceHost.exe", "SearchHost.exe",
                "TextInputHost.exe"],
 }
@@ -120,6 +124,7 @@ def configure_placement(ui: dict) -> None:
             toast_w=int(ui.get("toast_reserve_w", d["toast_w"])),
             toast_h=int(ui.get("toast_reserve_h", d["toast_h"])),
             ignore=[str(x) for x in (ui.get("avoid_ignore") or d["ignore"])],
+            missed_full=max(1, int(ui.get("missed_full", d["missed_full"]))),
         )
     except (TypeError, ValueError):
         log.warning("invalid overlay placement settings in config.json, using the defaults", exc_info=True)
@@ -490,6 +495,9 @@ class CallOverlay(QWidget):
         self._answered_at = None     # time.monotonic() of the answer
         self._direction = "in"       # "in" | "out"
         self._missed, self._missed_count, self._when = False, 0, ""
+        self._anon = False           # v1.1.0: the caller withheld the number
+        self._compact = False        # v1.1.0: an older missed card folded to two lines (click unfolds it)
+        self._pinned_open = False    # v1.1.0: the user unfolded this card: it is not folded again
         self._close_on_action = close_missed_on_action
         self._rank = 0               # stack position: 0 = live call / notice (bottom), 1 = missed card (above)
         self._seq = next(_SEQ)
@@ -785,6 +793,11 @@ class CallOverlay(QWidget):
         if not live:
             return
         live.sort(key=lambda w: (w._rank, -w._seq))
+        # v1.1.0: only the newest missed cards stay full size; older ones fold to two lines (a click unfolds one)
+        missed = [w for w in live if w._missed and not w._ended and not w._closing]
+        for i, w in enumerate(missed):            # already newest first (rank 1, -seq)
+            w.set_compact(i >= _PLACEMENT["missed_full"])
+        _RING_HIDDEN[:] = [w for w in _RING_HIDDEN if isValid(w) and w._suppressed and w._incoming_ringing()]
         scr = QGuiApplication.primaryScreen()
         area = scr.availableGeometry()
         p, width = _PLACEMENT, CallOverlay.OUTER
@@ -800,7 +813,9 @@ class CallOverlay(QWidget):
             vis_h = sum(w.height() - 2 * GLOW for w in live) + (len(live) - 1) * (STACK_GAP + 2 * GLOW)
             obstacles = find_obstacles(scr)
             ar = (area.left(), area.top(), area.right() + 1, area.bottom() + 1)
-            if p["bria_toast"] != "off" and any(w._incoming_ringing() for w in live):
+            # v1.1.0: also while the call rings in the main window's panel: Bria's toast covered a missed card
+            # (screenshot 2026-11-18 11:44)
+            if p["bria_toast"] != "off" and (any(w._incoming_ringing() for w in live) or _RING_HIDDEN):
                 obstacles.append(((ar[2] - p["toast_w"], ar[3] - p["toast_h"], ar[2], ar[3]), "reserve bria-toast"))
             vx, vbottom, reason = plan_stack(ar, width - 2 * GLOW, vis_h, live[0]._margin, p["gap"], obstacles)
             x, edge, downward = vx - GLOW, vbottom + GLOW, False
@@ -860,9 +875,9 @@ class CallOverlay(QWidget):
         Does not resize: callers call _place() when needed."""
         self.lbl_name.setText(primary)
         self.lbl_company.setText(secondary)
-        self.lbl_company.setVisible(bool(secondary))
+        self.lbl_company.setVisible(bool(secondary) and not self._compact)   # v1.1.0: a folded card stays folded
         self.lbl_number.setText(third)
-        self.lbl_number.setVisible(bool(third))
+        self.lbl_number.setVisible(bool(third) and not self._compact)
 
     # ---- states ----------------------------------------------------------------------------
     def show_ringing(self, number: str, direction: str = "in"):
@@ -877,13 +892,22 @@ class CallOverlay(QWidget):
             self._set_visual("ring", OUTGOING_MAUVE, "KIMENŐ HÍVÁS")
         else:
             self._set_visual("ring", INCOMING_GREEN, "BEJÖVŐ HÍVÁS")
-        self._lines(number or "Ismeretlen szám", "", "Keresés a MiniCRM-ben…")
+        self._anon = is_anonymous(number)        # v1.1.0: withheld number: nothing to look up, copy or search
+        if self._anon:
+            self._lines(ANONYMOUS_LABEL, "", ANONYMOUS_HINT)
+        else:
+            self._lines(number or "Ismeretlen szám", "", "Keresés a MiniCRM-ben…")
         self._show_ring_controls()
         self.btn_crm.setEnabled(False)
-        self.actions.setVisible(True)
+        self.actions.setVisible(not self._anon)
         if self._suppressed:                    # v0.10.0-beta.3: shown in the main window's call panel
             self.setWindowOpacity(1.0)
             self._place()
+            if self._direction == "in" and _PLACEMENT["mode"] == "auto":
+                _RING_HIDDEN.append(self)           # v1.1.0: missed cards on screen step aside of Bria's toast
+                CallOverlay._relayout()
+                if any(isValid(w) and w.isVisible() for w in _STACK):
+                    _ensure_place_timer(_TICK_LIVE_MS)
             return
         self.setWindowOpacity(0.0)
         self._place()
@@ -891,7 +915,7 @@ class CallOverlay(QWidget):
         self._fade(1.0, 160)
 
     def set_caller(self, info: CallerInfo):
-        if self._closing:
+        if self._closing or self._anon:
             return
         self._found = info.found
         if info.found:
@@ -913,7 +937,7 @@ class CallOverlay(QWidget):
         if self._closing or not self._found or not company:
             return
         self.lbl_company.setText(company)
-        self.lbl_company.setVisible(True)
+        self.lbl_company.setVisible(not self._compact)
         self._place()
 
     def set_answered(self):
@@ -962,13 +986,17 @@ class CallOverlay(QWidget):
         self._hide_controls()
         self._set_visual("missed", MISSED_RED, f"NEM FOGADOTT HÍVÁS{times} · {self._when}")
         self.callback_row.setVisible(self._callback_allowed)
-        self.actions.setVisible(True)
+        self.actions.setVisible(not self._anon)
         self._fade(1.0, 120)
         self._place()
 
     @property
     def number(self) -> str:
         return self._number
+
+    @property
+    def is_anonymous(self) -> bool:
+        return self._anon
 
     @property
     def is_missed(self) -> bool:
@@ -1244,6 +1272,59 @@ class CallOverlay(QWidget):
         self.lbl_hint.setVisible(True)
         self._place()
 
+    # ---- v1.1.0: folded older missed-call cards -------------------------------------------------------------
+    @property
+    def is_compact(self) -> bool:
+        return self._compact
+
+    def set_compact(self, on: bool) -> bool:
+        """Fold (on) a missed-call card to its header and a small name line, or unfold it. Called by _relayout for
+        every missed card (only the newest ui.missed_full stay unfolded); a card the user unfolded stays open.
+        Resizes the window but does not place it (the caller does). True if something changed."""
+        on = bool(on) and self._missed and not self._pinned_open and not self._ended and not self._closing
+        if on == self._compact:
+            return False
+        self._compact = on
+        if on:
+            for w in (self.lbl_company, self.lbl_number, self.callback_row, self.actions, self.lbl_hint):
+                w.setVisible(False)
+            self.lbl_name.setStyleSheet("font-size:14px; font-weight:600;")
+            # a selectable label would swallow the click that unfolds the card
+            self.lbl_name.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+            self.setToolTip("Kattints a kinyitáshoz")
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            self.lbl_company.setVisible(bool(self.lbl_company.text()))
+            self.lbl_number.setVisible(bool(self.lbl_number.text()))
+            self.callback_row.setVisible(self._callback_allowed)
+            self.actions.setVisible(not self._anon)
+            self.lbl_name.setStyleSheet("")
+            self.lbl_name.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            self.setToolTip("")
+            self.unsetCursor()
+        self.adjustSize()
+        self.changed.emit()
+        return True
+
+    def mousePressEvent(self, e):
+        if self._compact and e.button() == Qt.MouseButton.LeftButton:
+            self._pinned_open = True              # stays open from now on
+            self.set_compact(False)
+            CallOverlay._relayout()
+            e.accept()
+            return
+        super().mousePressEvent(e)
+
+    def resolve(self, text: str = "VISSZAHÍVVA"):
+        """v1.1.0: the caller of this missed card was reached later (they called again and it was answered, or we
+        called them back and they answered): the card confirms it briefly and goes."""
+        if self._closing or self._ended or not self._missed:
+            return
+        if self._compact:
+            self._pinned_open = True
+            self.set_compact(False)
+        self.finish(text, min(self._linger_ms or 1800, 1800), "done", INCOMING_GREEN)
+
     # ---- v0.10.0-beta.2: Visszahívás on a missed-call card ----------------------------------------------
     def set_callback(self, allowed: bool, blocked: bool = False):
         """allowed = Bria control on and a dialable number; blocked = a call rings / runs now (button disabled,
@@ -1254,8 +1335,9 @@ class CallOverlay(QWidget):
         self.btn_callback.setToolTip("Hívás közben nem indítható" if blocked else "A szám visszahívása a Briával")
         if self._missed and not self._ended and not self._closing:
             visible = self.callback_row.isVisible()
-            self.callback_row.setVisible(self._callback_allowed)
-            if visible != self._callback_allowed:
+            want = self._callback_allowed and not self._compact
+            self.callback_row.setVisible(want)
+            if visible != want:
                 self._place()
 
     def _request_callback(self):

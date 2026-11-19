@@ -3,6 +3,51 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [1.1.0-beta.1] - 2026-11-19
+
+First feature release after 1.0.0 (user requests 2026-11-19, plan approved the same day). Not tested live yet.
+Preview: `python main.py --demo-missed` (about 55 s of simulated calls), `python main.py --whatsnew`,
+`python status_window.py`.
+
+### Added
+- **Withheld numbers** (`events.py`, `overlay.py`, `status_window.py`, `main.py`): Bria logs such a caller as
+  `000anonymous@<pbx>` and 1.0 showed *Ismeretlen hívó / 000*. `normalize_number` now returns `anonymous` for
+  anonymous / restricted / private / unavailable / unknown / withheld / clir and for an all-zero number. The card says
+  *Rejtett szám – A hívó letiltotta a számkijelzést*, without lookup and without MiniCRM / Google / Másolás /
+  Visszahívás; two withheld calls are never merged into one missed card. History rows (also old `000` rows) read
+  *Rejtett szám · Letiltott számkijelzés*, searchable as "rejtett".
+- **Folding missed-call cards** (`overlay.py`): the newest `ui.missed_full` (default 2) missed cards stay full size,
+  older ones fold to the header plus a small name line; a click unfolds one for good. `ui.missed_max` 4 → 6.
+- **Caller reached** (`main.py` `_reached`, `StatusModel.mark_reached`): when a call with a number that has missed
+  cards is answered (they call again, or we call back), those cards close with *ÚJRA HÍVOTT · FELVETTED* /
+  *VISSZAHÍVVA*, and the missed rows of the last 48 h get the note *Újra hívott, felvetted* / *Visszahívva* (green;
+  the burgundy tint goes). Log: `call … reached a missed caller: N card(s) closed, M history row(s) marked`.
+- **History day band** (`status_window.py`): taller header with a lavender tint and accent bar, the day in bold 14 px
+  with the full date for Ma / Tegnap (*Ma · november 19., csütörtök*), counts on the right. New **Mind összecsuk /
+  Mind kinyit** button next to the date filters.
+- **Visszajelzés** (`feedback.py`, button next to ⚙, tray menu *Visszajelzés küldése…*): Hiba / Ötlet / Egyéb, text,
+  optional reply address, optional end of `app.log` (400 lines, numbers of 8+ digits and `name=` / `company=` values
+  masked) plus the status report. Sent as JSON to a Formspree form (`version.FEEDBACK_ENDPOINT`, override
+  `feedback.endpoint`), which e-mails it to the author. Web3Forms was rejected: its free plan refuses submissions
+  that do not come from a browser. Fallback (no form id, network error): clipboard + `mailto:`.
+- **Újdonságok** (`whatsnew.py`, `assets/whatsnew.md`): shown once after an update (4 s after the start, never during
+  a call), sections newer than `settings.last_seen_version` up to the running version (release part only); a copy
+  updated from 1.0.x counts as 1.0.0 when it has a history database, a fresh install shows nothing. Tray menu
+  *Újdonságok*. `build.ps1` checks that `whatsnew.md` is bundled.
+- **CANCEL diagnostics** (`detectors.py`): every CANCEL of a known call is logged as `cancel: call … rang N s,
+  Reason='…' -> cancel|elsewhere|forwarded`. New optional outcome **forwarded** (*TOVÁBBMENT* on the card,
+  *Továbbment* in the history, not a missed call): `detectors.bria_log.forwarded_reason_regex` or
+  `forwarded_after_s`, both off until a live test shows what the PBX sends when 101 passes a call to 102.
+- **Licence preparation** (`licensing.py`, `tools/make_license.py`): Ed25519-signed offline licence file
+  (`%LOCALAPPDATA%\CallCompanion\license.key`), machine id from `MachineGuid`, pure-Python verify (checked against
+  the RFC 8032 test vector). `PUBLIC_KEY` is empty, so the state is *Belső használat* (Névjegy page, one log line);
+  nothing is restricted.
+- Icons `feedback` and `sparkle` (`icons.py`). `.gitignore`: `*.key`, private key files.
+
+### Fixed
+- **Bria's toast covered a missed card** (screenshot 2026-11-18 11:44): while a call rang in the main window's call
+  panel, the card stack did not reserve the toast area. The ringing panel call now counts (`_RING_HIDDEN`).
+
 ## [1.0.0] - 2026-11-17
 
 First stable release. The Chrome extension is now the **Chrome Web Store** one (published 2026-11-17, unlisted, id

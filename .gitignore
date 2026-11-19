@@ -12,3 +12,7 @@ last_lookup*
 bria_probe.txt
 app.lock
 config.local.json
+
+# v1.1.0 licence keys and files (never commit the private key)
+*.key
+*private*key*

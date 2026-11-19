@@ -291,6 +291,26 @@ The MiniCRM button keeps pointing at the profile of the shown name, even when th
 
 ## What works in this release
 
+New in 1.1.0 (see the CHANGELOG; preview: `python main.py --demo-missed`, `python main.py --whatsnew`,
+`python status_window.py`):
+
+- **Withheld numbers**: Bria logs them as `000anonymous@<pbx>`; the card and the history say *Rejtett szám* (no
+  MiniCRM search, no copy / Google / Visszahívás). Rows saved before 1.1.0 as `000` show the same.
+- **Missed-call cards fold**: the newest `ui.missed_full` (2) stay full size, older ones fold to two lines and unfold
+  with a click; at most `ui.missed_max` (6). A **caller who is reached later** (calls again and you answer, or you
+  call back and they answer) loses the missed card by itself; the history row gets a green note.
+- **Bria's toast no longer covers missed cards** while a call rings in the main window's call panel.
+- **History**: a stronger day band with the full date (*Ma · november 19., csütörtök*) and **Mind összecsuk /
+  Mind kinyit**.
+- **Visszajelzés** (speech-bubble button next to ⚙, tray menu): bug or idea to the author by e-mail through
+  Formspree, optionally with the end of `app.log` (phone numbers and names masked). Without a form id or network: the
+  text goes to the clipboard and the e-mail program opens.
+- **Újdonságok** after an update (once; tray menu any time), from `assets/whatsnew.md`.
+- **Diagnostics for calls the PBX passes on** (101 → 102): every CANCEL is logged with its `Reason` and ring time
+  (`cancel: ...`); optional rules turn it into *Továbbment* instead of a missed call (off until verified).
+- **Licence preparation** (`licensing.py`, `tools/make_license.py`): signed offline licence files; nothing is
+  restricted, the Névjegy page says *Belső használat*.
+
 New on the road to 1.0 (0.6.0 - 0.9.0-rc.1, see the CHANGELOG):
 
 - **Persistent call history** with name and highlighted company, outcome, talk time, transfer note; filters and search.
@@ -371,13 +391,15 @@ Carried over from earlier releases:
 | One **live** call card at a time | A new ringing call replaces the previous live card (a call that was answered or still ringing then has no card any more); missed-call cards are kept | - |
 | **Outgoing calls are unverified against a real Bria log** | The outgoing INVITE layout (dialled number in the `To` header, 401/407 challenges) was built from the SIP standard and the `Transmitting to` marker, not from a captured call | Run `python main.py --probe-bria 90`, place an outgoing test call and check `Parser recognised ...: ['ringing','answered','ended']`; keep `bria_probe.txt` if not |
 | **"Answered elsewhere" is unverified** | A call picked up on another phone is told apart from a missed call by the `Reason: ... completed elsewhere` header of the CANCEL; whether your PBX sends it is not known | If such calls leave a missed-call card, send the CANCEL lines from `--probe-bria` |
+| **A call the PBX passes on to another extension shows as missed** (1.1.0: unverified fix) | When 101 does not answer and the PBX moves the call to 102, 101 receives a CANCEL; which `Reason` the PBX sends then is not known | `app.log` logs every CANCEL as `cancel: call … rang N s, Reason='…' -> …`. Once a live test shows the Reason, set `detectors.bria_log.forwarded_reason_regex` (or `forwarded_after_s`) and the call becomes *Továbbment* |
+| **Visszajelzés needs a Formspree form** | `version.FEEDBACK_ENDPOINT` is empty until the form exists; Formspree's free plan allows 50 submissions a month. Web3Forms was rejected: its free plan refuses non-browser submissions | Without it the text goes to the clipboard and the e-mail program opens. If Formspree answers 403 / reCAPTCHA, switch reCAPTCHA off in the form's settings (UNVERIFIED) |
 | **Transfer is not available on a provider-provisioned Bria** | Bria Enterprise 6.8.8.1 provisioned by Opennetworks answers `transferCall` (and attended transfer, recording) with 400, exactly like an unknown command; hold / resume work. Asked the provider to enable it (no answer yet, 2026-11-13) | The app checks this by itself and hides **↪ Átkapcsolás** (`bria api: capability transferCall -> 400`); if the provider enables it, the button appears without an update. Meanwhile transfer in Bria's own window |
 | **Transfer is "blind"** | Bria accepts the transfer and the card says *ÁTKAPCSOLVA*; if the colleague does not pick up, Bria brings the call back by itself, but the card is already gone | Watch Bria's own window after a transfer to an extension that may be unattended |
 | **Hold changed in Bria's own window is not mirrored on the card** | The card learns the hold state only from its own button (each press first asks Bria for the real state, so it never toggles the wrong way) | - |
 | **A lost hang-up leaves the in-call card open** | The card closes on the `BYE` found in the Bria log; if the log is rotated or the line is missed, the counter keeps running | Close it with **✕** |
 | **Card placement is verified on the build PC only** | The rules come from `tools/placement_probe.py` on the build PC (2 monitors, 150 %). Native Windows notifications of other programs (Teams, Outlook…) are invisible to the window scan, like Bria's toast; Windows stacks them in the same corner | Live test of 0.9.0-rc.2; `app.log` shows every change as `placement: corner|avoid …|above … -> x,y`. If Bria's toast is switched off in Windows, set `"bria_toast": "off"` |
 | Cards follow the **primary screen** only | Windows shows its notifications (and Bria's toast) on the primary monitor, so the cards stay there | - |
-| Missed-call cards: at most 4 | The stack must fit on the screen | `ui.missed_max` |
+| Missed-call cards: at most 6, older ones folded (1.1.0) | The stack must fit on the screen | `ui.missed_max`, `ui.missed_full` |
 | Needs Bria **Log Level = Verbose** | At lower levels Bria writes no SIP messages | Help > Troubleshooting > Support. Verbose logs grow quickly. The app opens the log only for each read, so Bria can rotate or rename it; rotation has not been tested live |
 | **Main window position is best effort** | Windows 11 often reports no position for tray icons, so the window goes to the bottom-right of the usable area of the screen under the cursor (or the primary screen) rather than exactly at the icon | - |
 | **Stale-log warning after 30 min** | The Bria health row turns yellow when `Log.txt` has not changed for 30 minutes, which can also happen on a quiet line | Treat it as a hint, not an error |
@@ -879,8 +901,13 @@ and one-click transfer through the Bria Desktop API, extension list.
 - **1.0.0-rc.1**: the new app logo everywhere (app, tray, installer, extension, Névjegy), Chrome
   extension 1.0.0 and its Chrome Web Store material (`store/`, privacy page `docs/privacy.html`), clean-up of unused
   settings and packages.
-- **1.0.0** (this release, done): the Chrome extension comes from the Chrome Web Store (published 2026-11-17,
+- **1.0.0** (released 2026-11-17): the Chrome extension comes from the Chrome Web Store (published 2026-11-17,
   unlisted) and the app accepts only that one; the extension list and history format are frozen.
+- **1.1.0** (this release, beta): withheld numbers, folding missed cards, caller reached, history day bands,
+  Visszajelzés, Újdonságok, CANCEL diagnostics, licence preparation.
+- **Later milestone: mobile app** (idea, 2026-11-19): Android could show a caller card for calls on the phone; the open
+  question is MiniCRM access without the Chrome extension (the PC app as a relay, or an API key). iOS allows no
+  in-call card. Not started.
 
 **After 1.0** (agreed order): extension 1.0.1 with a light popup (store update first); call detection from the Bria
 Desktop API instead of the Verbose log; Bria as a hidden engine; the transfer UI if the provider enables it.
@@ -906,15 +933,16 @@ calls, acrylic blur.
 callcompanion/
   main.py  detectors.py  events.py  local_api.py  crm.py  overlay.py  status_window.py  dev_window.py
   history.py  settings.py  settings_dialog.py  theme.py  icons.py  call_panel.py  bria_api.py  extensions_dialog.py  probe.py  updater.py
+  feedback.py  whatsnew.py  licensing.py                                       (1.1.0)
   config.py  config.json  version.py  requirements.txt
   extension/            manifest.json  background.js  content.js
-  assets/               app.ico
-  tools/                placement_probe.py  bria_transfer_probe.py  bria_capabilities_probe.py  (diagnostics, not shipped)
+  assets/               app.ico  logo.svg  whatsnew.md (Újdonságok text, 1.1.0)
+  tools/                placement_probe.py  bria_transfer_probe.py  bria_capabilities_probe.py  make_license.py  (not shipped)
   build.ps1  callcompanion.spec  installer.iss
   README.md  CHANGELOG.md  .gitignore
 ```
 
-Runtime data lives in `%LOCALAPPDATA%\CallCompanion\` (`app.log`, `app.lock`, `history.db`, `settings.json`, optional personal `config.json`,
+Runtime data lives in `%LOCALAPPDATA%\CallCompanion\` (`app.log`, `app.lock`, `history.db`, `settings.json`, optional personal `config.json`, optional `license.key`,
 `updates\`, `update-install.log`, optional dumps and probe output).
 
 ---
