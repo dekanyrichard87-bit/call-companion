@@ -3,6 +3,15 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [1.1.0-beta.2] - 2026-11-19
+
+### Changed
+- **Visszajelzés goes out by itself** (`version.py`): `FEEDBACK_ENDPOINT` is the author's Formspree form
+  (`https://formspree.io/f/xgakzyez`, created 2026-11-19; submissions are e-mailed to the author). Before, beta.1
+  fell back to clipboard + e-mail program unless `feedback.endpoint` was set in the personal `config.json` (that
+  override still works). UNVERIFIED until the first live submission: Formspree may ask once by e-mail to confirm the
+  form, and its reCAPTCHA must be off for submissions from the app.
+
 ## [1.1.0-beta.1] - 2026-11-19
 
 First feature release after 1.0.0 (user requests 2026-11-19, plan approved the same day). Not tested live yet.

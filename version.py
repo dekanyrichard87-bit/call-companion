@@ -5,7 +5,7 @@ Release flow:  bump __version__ here, add an entry to CHANGELOG.md, commit, then
 which builds the installer and creates the GitHub release v<version> that installed copies update to.
 build.ps1, callcompanion.spec and installer.iss all read the version from this file.
 """
-__version__ = "1.1.0-beta.1"
+__version__ = "1.1.0-beta.2"
 
 # GitHub repository whose Releases the auto-updater checks (owner/name).
 GITHUB_REPO = "dekanyrichard87-bit/call-companion"
@@ -25,5 +25,5 @@ def numeric_version(v: str = __version__) -> tuple:
 # v1.1.0 Visszajelzés (feedback.py): Formspree form that e-mails each submission to the author. A Formspree form id
 # is public by design (it is in every HTML form using it). Empty = no sending: the text goes to the clipboard and the
 # e-mail program opens to FEEDBACK_EMAIL. Can be overridden in config.json: "feedback": {"endpoint": "..."}.
-FEEDBACK_ENDPOINT = ""          # e.g. "https://formspree.io/f/abcdwxyz"
+FEEDBACK_ENDPOINT = "https://formspree.io/f/xgakzyez"     # form "Call Companion visszajelzés" (2026-11-19)
 FEEDBACK_EMAIL = "dekany.richard@hotmail.com"
