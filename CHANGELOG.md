@@ -34,10 +34,19 @@ Preview: `python main.py --demo-missed` (about 55 s of simulated calls), `python
   a call), sections newer than `settings.last_seen_version` up to the running version (release part only); a copy
   updated from 1.0.x counts as 1.0.0 when it has a history database, a fresh install shows nothing. Tray menu
   *Újdonságok*. `build.ps1` checks that `whatsnew.md` is bundled.
-- **CANCEL diagnostics** (`detectors.py`): every CANCEL of a known call is logged as `cancel: call … rang N s,
-  Reason='…' -> cancel|elsewhere|forwarded`. New optional outcome **forwarded** (*TOVÁBBMENT* on the card,
-  *Továbbment* in the history, not a missed call): `detectors.bria_log.forwarded_reason_regex` or
-  `forwarded_after_s`, both off until a live test shows what the PBX sends when 101 passes a call to 102.
+- **Továbbment** (`detectors.py`, `settings.py`, `settings_dialog.py`, `main.py`): a call the PBX passes on to the
+  next extension no longer stays a missed call. Measured live 2026-11-19 on ext. 104 (Asterisk via Opennetworks,
+  every extension passes calls on): the CANCEL carries **no Reason header**, the same as a caller hanging up, and the
+  PBX passes the call on after a fixed ~20.9 s (20.85 s and 20.93 s; a caller hang-up after 12.73 s). So the ring
+  time decides, measured from Bria's own log timestamps (INVITE → CANCEL; the app's clock is only the fallback).
+  New setting **⚙ Beállítások > Mellékek > Továbbadás** ("Nincs továbbadás" / 10–60 mp, `settings.json`
+  `forward_after_s`, default off because it is the PBX's value): a call that rang at least that long becomes
+  *TOVÁBBMENT* on the card and *Továbbment* (grey) in the history, not counted as missed. A caller who gives up
+  earlier is still a missed call on the extension where it was ringing. Every CANCEL is logged as
+  `cancel: call … rang 20.85 s (log), Reason='', forward after 20 s -> forwarded`. Fallbacks for other PBXs:
+  `detectors.bria_log.forwarded_after_s`, `forwarded_reason_regex`. Replayed on both live probe files: all three
+  calls classified right.
+- `theme.py`: style for combo boxes (QComboBox) in both themes.
 - **Licence preparation** (`licensing.py`, `tools/make_license.py`): Ed25519-signed offline licence file
   (`%LOCALAPPDATA%\CallCompanion\license.key`), machine id from `MachineGuid`, pure-Python verify (checked against
   the RFC 8032 test vector). `PUBLIC_KEY` is empty, so the state is *Belső használat* (Névjegy page, one log line);

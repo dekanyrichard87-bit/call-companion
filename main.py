@@ -146,6 +146,22 @@ class Controller(QObject):
         # v0.10.0-beta.3: a missed call shown in the main window's call panel does not hold the update back
         return any(isValid(card) and not card.suppressed for card in self.missed.values())
 
+    def _apply_forward(self):
+        """v1.1.0: Beállítások > Mellékek "Továbbadás" (settings.json) wins over config forwarded_after_s."""
+        det = getattr(self, "bria_service", None)
+        if det is None or self.settings is None:
+            return
+        sec = float(self.settings.forward_after_s)
+        if not sec:
+            try:
+                sec = max(0.0, float(self.cfg["detectors"]["bria_log"].get("forwarded_after_s") or 0))
+            except (TypeError, ValueError):
+                sec = 0.0
+        if sec != det.fwd_after or not getattr(self, "_fwd_logged", False):
+            det.fwd_after = sec                # a float assignment: safe to read from the detector thread
+            self._fwd_logged = True
+            log.info("forward after: %s", f"{sec:g} s" if sec else "off")
+
     def start_services(self):
         la = self.cfg["local_api"]
         if la["enabled"]:
@@ -154,6 +170,7 @@ class Controller(QObject):
         bria = self.cfg["detectors"]["bria_log"]
         if bria["enabled"]:
             self.bria_service = BriaLogDetector(bria, self.event_sig.emit)
+            self._apply_forward()
             self.services.append(self.bria_service)
         for s in self.services:
             s.start()
@@ -651,8 +668,9 @@ class Controller(QObject):
             ov.set_company(company)
 
     # ---- v0.8.0: hold / transfer through the Bria Desktop API ------------------------------------------------
-    def _extensions_changed(self):
+    def _extensions_changed(self):            # any settings change (extensions, theme, v1.1.0 Továbbadás)
         self._apply_call_controls()
+        self._apply_forward()
 
     def _apply_call_controls(self):
         ov = self._live_overlay()

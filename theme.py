@@ -334,6 +334,11 @@ QPushButton#primary {{ background: {p.blue}; color: {p.on_accent}; font-weight: 
 QPushButton#primary:hover {{ background: {p.blue_hover}; }}
 QPushButton#danger {{ background: {p.danger_bg}; color: {p.red}; font-weight: 600; }}
 QPushButton#danger:hover {{ background: {p.danger_hover}; }}
+QComboBox {{ background: {p.surface2}; border: none; border-radius: 8px; padding: 6px 12px; min-width: 130px; }}
+QComboBox:hover {{ background: {p.overlay if not p.light else '#bcc0cc'}; }}
+QComboBox::drop-down {{ border: none; width: 18px; }}
+QComboBox QAbstractItemView {{ background: {p.surface}; color: {p.text}; border: 1px solid {p.surface2};
+                               selection-background-color: {p.surface2}; selection-color: {p.text}; outline: none; }}
 QCheckBox {{ color: {p.subtext}; spacing: 8px; }}
 QCheckBox::indicator {{ width: 34px; height: 18px; border-radius: 9px; background: {p.surface2}; }}
 QCheckBox::indicator:checked {{ background: {p.blue}; }}

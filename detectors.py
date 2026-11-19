@@ -7,6 +7,7 @@ import os
 import re
 import threading
 import time
+from datetime import datetime
 
 from events import CallEvent, normalize_number
 
@@ -19,6 +20,19 @@ RE_REASON = re.compile(r"(?i)^\s*Reason\s*:\s*(.*)")
 RE_CALLID = re.compile(r"(?i)\bCall-ID\s*:\s*(\S+)")
 RE_CSEQ = re.compile(r"(?i)\bCSeq\s*:\s*\d+\s+(\w+)")
 RE_USER = re.compile(r"(?i)(?:sips?|tel):([^@>;:\s]+)")
+# v1.1.0: Bria writes a timestamp on the transport line just before each SIP message
+# ("2026-11-19 13:06:13.564 | info |   RESIP:TRANSPORT | ... incoming from: [...]"); used for the ring time.
+RE_TS = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3})")
+
+
+def _ts(text: str):
+    m = RE_TS.search(text or "")
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S.%f")
+    except ValueError:
+        return None
 
 
 def _expand(pattern: str) -> str:
@@ -112,16 +126,19 @@ class BriaLogDetector(threading.Thread):
         self._ctx = collections.deque(maxlen=2)
         self._in = re.compile(cfg["incoming_regex"])
         self._out = re.compile(cfg["outgoing_regex"])
-        # v1.1.0: a call the PBX passes on to another extension (no answer on 101 -> rings on 102) must not stay a
-        # missed call here. UNVERIFIED which Reason header the PBX sends then; both rules are off by default and
-        # every CANCEL is logged ("cancel: ...") so the live test shows what to match.
+        # v1.1.0: a call the PBX passes on to another extension must not stay a missed call here. Verified live
+        # 2026-11-19 (Asterisk via Opennetworks, ext. 104 -> 101): the CANCEL carries NO Reason header, exactly like a
+        # caller hanging up; the PBX passes the call on after a fixed ~20.9 s (20.85 / 20.93 s, a hang-up after 12.7 s).
+        # So the ring time decides: >= forward_after_s -> "forwarded". The value is the PBX's, set per PC in
+        # Beállítások > Mellékek (settings.json "forward_after_s"; main.py sets fwd_after); config forwarded_after_s
+        # is the fallback. forwarded_reason_regex stays for PBXs that do send a Reason.
         rx = str(cfg.get("forwarded_reason_regex") or "").strip()
         self._fwd_rx = re.compile(rx) if rx else None
         try:
-            self._fwd_after = max(0.0, float(cfg.get("forwarded_after_s") or 0))
+            self.fwd_after = max(0.0, float(cfg.get("forwarded_after_s") or 0))
         except (TypeError, ValueError):
-            self._fwd_after = 0.0
-        self.rang_at: dict[str, float] = {}  # call id -> time.monotonic() of the INVITE (ring time of a CANCEL)
+            self.fwd_after = 0.0
+        self.rang_at: dict[str, tuple] = {}  # call id -> (time.monotonic(), log timestamp or None) of the INVITE
 
     def stop(self):
         self._stop_evt.set()
@@ -203,6 +220,7 @@ class BriaLogDetector(threading.Thread):
             window = line + " " + " ".join(self._ctx)
             outgoing = bool(self._out.search(window)) and not self._in.search(window)
             self._blk = {
+                "ts": _ts(" ".join(self._ctx)) or _ts(line),
                 "method": m.group(1), "status": int(m.group(2)) if m.group(2) else None,
                 "from": None, "to": None, "callid": None, "cseq": None, "reason": "",
                 "incoming": not outgoing, "done": False, "n": 0,
@@ -243,17 +261,22 @@ class BriaLogDetector(threading.Thread):
         cid = b["callid"]
         if cid in self.calls:
             reason = b["reason"]
-            ring = time.monotonic() - self.rang_at.get(cid, time.monotonic())
+            mono0, ts0 = self.rang_at.get(cid, (time.monotonic(), None))
+            if ts0 is not None and b.get("ts") is not None:
+                ring, src = (b["ts"] - ts0).total_seconds(), "log"       # exact: Bria's own timestamps
+            else:
+                ring, src = time.monotonic() - mono0, "clock"             # fallback: when we read the lines
             elsewhere = "elsewhere" in reason or "cause=200" in reason
             if elsewhere:
                 outcome = "elsewhere"
             elif self._fwd_rx is not None and self._fwd_rx.search(reason):
                 outcome = "forwarded"
-            elif self._fwd_after and self.dirs.get(cid) == "in" and ring >= self._fwd_after:
+            elif self.fwd_after and self.dirs.get(cid) == "in" and ring >= self.fwd_after:
                 outcome = "forwarded"
             else:
                 outcome = "cancel"
-            log.info("cancel: call %s rang %.1f s, Reason=%r -> %s", cid, ring, reason or "", outcome)
+            log.info("cancel: call %s rang %.2f s (%s), Reason=%r, forward after %s -> %s", cid, ring, src,
+                     reason or "", f"{self.fwd_after:g} s" if self.fwd_after else "off", outcome)
             self._end(cid, outcome)
 
     def flush_idle(self):
@@ -279,7 +302,7 @@ class BriaLogDetector(threading.Thread):
                 number = normalize_number(party)
                 direction = "in" if b["incoming"] else "out"
                 self.calls[cid], self.dirs[cid] = number, direction
-                self.rang_at[cid] = time.monotonic()
+                self.rang_at[cid] = (time.monotonic(), b.get("ts"))
                 while len(self.rang_at) > 100:                   # calls whose end was never seen
                     self.rang_at.pop(next(iter(self.rang_at)))
                 self.emit(CallEvent("ringing", cid, number, "bria-log", direction))

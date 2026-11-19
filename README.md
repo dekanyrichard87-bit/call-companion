@@ -306,8 +306,9 @@ New in 1.1.0 (see the CHANGELOG; preview: `python main.py --demo-missed`, `pytho
   Formspree, optionally with the end of `app.log` (phone numbers and names masked). Without a form id or network: the
   text goes to the clipboard and the e-mail program opens.
 - **Újdonságok** after an update (once; tray menu any time), from `assets/whatsnew.md`.
-- **Diagnostics for calls the PBX passes on** (101 → 102): every CANCEL is logged with its `Reason` and ring time
-  (`cancel: ...`); optional rules turn it into *Továbbment* instead of a missed call (off until verified).
+- **Továbbment**: a call the PBX passes on to the next extension (it rang at least ⚙ Beállítások > Mellékek >
+  Továbbadás seconds, measured from Bria's log timestamps) is *Továbbment*, not a missed call; every CANCEL is logged
+  (`cancel: ...`).
 - **Licence preparation** (`licensing.py`, `tools/make_license.py`): signed offline licence files; nothing is
   restricted, the Névjegy page says *Belső használat*.
 
@@ -391,7 +392,7 @@ Carried over from earlier releases:
 | One **live** call card at a time | A new ringing call replaces the previous live card (a call that was answered or still ringing then has no card any more); missed-call cards are kept | - |
 | **Outgoing calls are unverified against a real Bria log** | The outgoing INVITE layout (dialled number in the `To` header, 401/407 challenges) was built from the SIP standard and the `Transmitting to` marker, not from a captured call | Run `python main.py --probe-bria 90`, place an outgoing test call and check `Parser recognised ...: ['ringing','answered','ended']`; keep `bria_probe.txt` if not |
 | **"Answered elsewhere" is unverified** | A call picked up on another phone is told apart from a missed call by the `Reason: ... completed elsewhere` header of the CANCEL; whether your PBX sends it is not known | If such calls leave a missed-call card, send the CANCEL lines from `--probe-bria` |
-| **A call the PBX passes on to another extension shows as missed** (1.1.0: unverified fix) | When 101 does not answer and the PBX moves the call to 102, 101 receives a CANCEL; which `Reason` the PBX sends then is not known | `app.log` logs every CANCEL as `cancel: call … rang N s, Reason='…' -> …`. Once a live test shows the Reason, set `detectors.bria_log.forwarded_reason_regex` (or `forwarded_after_s`) and the call becomes *Továbbment* |
+| **Továbbment depends on a setting** (1.1.0) | The PBX sends no Reason when it passes an unanswered call on (verified 2026-11-19); only the ring time tells it from a caller hanging up. Opennetworks passes calls on after ~20.9 s | Set ⚙ Beállítások > Mellékek > Továbbadás to **20 mp** on every PC. A caller who hangs up between 20.0 and 20.9 s is counted as passed on. Which colleague answered in the end is not known yet (planned: Call Companions sharing call ends over the network share, 1.2) |
 | **Visszajelzés needs a Formspree form** | `version.FEEDBACK_ENDPOINT` is empty until the form exists; Formspree's free plan allows 50 submissions a month. Web3Forms was rejected: its free plan refuses non-browser submissions | Without it the text goes to the clipboard and the e-mail program opens. If Formspree answers 403 / reCAPTCHA, switch reCAPTCHA off in the form's settings (UNVERIFIED) |
 | **Transfer is not available on a provider-provisioned Bria** | Bria Enterprise 6.8.8.1 provisioned by Opennetworks answers `transferCall` (and attended transfer, recording) with 400, exactly like an unknown command; hold / resume work. Asked the provider to enable it (no answer yet, 2026-11-13) | The app checks this by itself and hides **↪ Átkapcsolás** (`bria api: capability transferCall -> 400`); if the provider enables it, the button appears without an update. Meanwhile transfer in Bria's own window |
 | **Transfer is "blind"** | Bria accepts the transfer and the card says *ÁTKAPCSOLVA*; if the colleague does not pick up, Bria brings the call back by itself, but the card is already gone | Watch Bria's own window after a transfer to an extension that may be unattended |

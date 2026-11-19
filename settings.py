@@ -9,7 +9,8 @@ hand-edited file and an update never touches either of them.
       "theme": "system",                (v0.10.0: dark | light | system)
       "call_in_window": true,           (v0.10.0-beta.3: a call shows in the active main window)
       "extensions": [ {"number": "102", "name": "Kovács Péter"}, ... ],
-      "last_seen_version": "1.1.0"      (v1.1.0: the "Újdonságok" window was shown for this version)
+      "last_seen_version": "1.1.0",     (v1.1.0: the "Újdonságok" window was shown for this version)
+      "forward_after_s": 20             (v1.1.0: the PBX passes an unanswered call on after this; 0 = off)
     }
 """
 from __future__ import annotations
@@ -97,6 +98,25 @@ class Settings(QObject):
     def set_last_seen_version(self, version: str) -> None:
         if version and version != self.last_seen_version:
             self._data["last_seen_version"] = str(version)
+            self._save()
+
+    FORWARD_CHOICES = (0, 10, 15, 20, 25, 30, 40, 50, 60)
+
+    @property
+    def forward_after_s(self) -> int:
+        """v1.1.0: an incoming call cancelled after ringing at least this long was passed on by the PBX
+        ("Továbbment"), not missed. 0 = this PC's extension is not passed on (default)."""
+        try:
+            v = int(self._data.get("forward_after_s") or 0)
+        except (TypeError, ValueError):
+            return 0
+        return v if v > 0 else 0
+
+    def set_forward_after_s(self, seconds: int) -> None:
+        seconds = max(0, int(seconds or 0))
+        if seconds != self.forward_after_s:
+            self._data["forward_after_s"] = seconds
+            log.info("forward after: %s", f"{seconds} s" if seconds else "off")
             self._save()
 
     @property

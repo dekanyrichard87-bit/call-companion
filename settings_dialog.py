@@ -13,7 +13,7 @@ import time
 from PySide6.QtCore import QPointF, QRectF, QSize, QTimer, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
-    QAbstractButton, QButtonGroup, QCheckBox, QDialog, QHBoxLayout, QLabel, QPushButton, QStackedWidget,
+    QAbstractButton, QButtonGroup, QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QPushButton, QStackedWidget,
     QVBoxLayout, QWidget,
 )
 
@@ -190,7 +190,7 @@ class SettingsDialog(QDialog):
         nav.addStretch(1)
         root.addLayout(nav)
 
-        self.stack.addWidget(ExtensionsEditor(settings))
+        self.stack.addWidget(self._ext_page(settings))
         self.stack.addWidget(self._look_page())
         self.stack.addWidget(self._dev_page())
         self.stack.addWidget(self._about_page(version))
@@ -221,6 +221,35 @@ class SettingsDialog(QDialog):
         lab = QLabel(text, objectName="hint")          # subtext, 12 px (theme.qss_main)
         lab.setWordWrap(True)
         return lab
+
+    def _ext_page(self, settings) -> QWidget:
+        """Mellékek: the extension editor, and below it (v1.1.0) when the PBX passes an unanswered call on."""
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        lay.addWidget(ExtensionsEditor(settings), 1)
+        title = QLabel("Továbbadás")
+        title.setObjectName("section")
+        lay.addSpacing(6)
+        lay.addWidget(title)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Ha nem veszem fel, a központ továbbviszi a hívást ennyi idő után:"), 1)
+        self.fwd = QComboBox()
+        self.fwd.setCursor(Qt.CursorShape.PointingHandCursor)
+        for sec in settings.FORWARD_CHOICES:
+            self.fwd.addItem("Nincs továbbadás" if sec == 0 else f"{sec} mp", sec)
+        cur = settings.forward_after_s
+        if cur and cur not in settings.FORWARD_CHOICES:
+            self.fwd.addItem(f"{cur} mp", cur)
+        self.fwd.setCurrentIndex(max(0, self.fwd.findData(cur)))
+        self.fwd.currentIndexChanged.connect(lambda _i: settings.set_forward_after_s(self.fwd.currentData()))
+        row.addWidget(self.fwd)
+        lay.addLayout(row)
+        lay.addWidget(self._hint("Ha egy hívás ennél tovább csengett nálad, és utána szűnt meg, nem nem fogadott "
+                                 "hívás lesz belőle, hanem „Továbbment” (a központ vitte tovább a következő "
+                                 "mellékre). Válassz kicsivel rövidebb időt, mint a központé: pl. 21 mp-hez a 20-at."))
+        return w
 
     def _look_page(self) -> QWidget:
         """v0.10.0 Megjelenés: Sötét / Világos / Rendszer szerint. One click switches at once (saved too)."""
