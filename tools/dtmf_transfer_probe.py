@@ -1,4 +1,4 @@
-"""DTMF transfer probe v1 (preparation for 1.2.0): can Call Companion transfer a call with the PBX's in-call code?
+"""DTMF transfer probe v2 (preparation for 1.2.0): can Call Companion transfer a call with the PBX's in-call code?
 
 Opennetworks set up in-call DTMF transfer (2026-11-24): #11 -> 101, #12 -> 102 ... Typed on Bria's in-call keypad
 it works (verified 2026-11-24: Bria's Log.txt shows `url=tone:#;duration=200;oob`, `tone:1`, `tone:1`, then the PBX
@@ -17,6 +17,12 @@ Run DURING an answered test call (e.g. your own mobile calling the company numbe
    '#' and '*' - if Bria answers 400 to '#', the variants 'pound' / 'hash' ('*': 'star') are tried and logged.
 4. Watches for 8 s: does the call disappear from Bria (status call), and which `url=tone:` / BYE lines appear in
    Bria's Log.txt meanwhile (the same lines as with the keypad = the PBX got the code).
+v2 (2026-11-24): v1 got 200 for every tone, but Bria logged no `url=tone:` line and nothing happened (twice), while
+Bria reported the participant state 'ringing' although the call was answered (?). So v2 first FINDS a body form
+that really plays a tone: it sends the harmless single digit '1' (the transfer codes start with '#') in several
+spellings, one after the other, and after each one looks for `MediaResourceParticipant playing ... url=tone:1` in
+Bria's Log.txt. Only with a form that produced that line is the transfer code sent. The raw status XML is logged
+(digits masked) so the real participant state names become known.
 Everything is printed and saved to %LOCALAPPDATA%\\CallCompanion\\dtmf_transfer_probe.txt (send that file).
 """
 import argparse
@@ -36,6 +42,18 @@ except ImportError:
 LINES = []
 LOG_GLOB = os.path.expandvars(r"%APPDATA%\CounterPath Corporation\Bria Enterprise\*\*\Logs\Log.txt")
 VARIANTS = {"#": ["#", "pound", "hash"], "*": ["*", "star"]}
+# (name, body template): {cid} = Bria call id, {t} = tone. All UNVERIFIED except that Bria answers 200 to the first.
+FORMS = [
+    ("callId+tone", "<dtmf>\r\n <callId>{cid}</callId>\r\n <tone>{t}</tone>\r\n</dtmf>"),
+    ("tone", "<dtmf>\r\n <tone>{t}</tone>\r\n</dtmf>"),
+    ("callId+tone@digit", "<dtmf>\r\n <callId>{cid}</callId>\r\n <tone digit=\"{t}\"/>\r\n</dtmf>"),
+    ("tone@digit", "<dtmf>\r\n <tone digit=\"{t}\"/>\r\n</dtmf>"),
+    ("callId+digit", "<dtmf>\r\n <callId>{cid}</callId>\r\n <digit>{t}</digit>\r\n</dtmf>"),
+    ("callId+digits", "<dtmf>\r\n <callId>{cid}</callId>\r\n <digits>{t}</digits>\r\n</dtmf>"),
+    ("callId+tones", "<dtmf>\r\n <callId>{cid}</callId>\r\n <tones>{t}</tones>\r\n</dtmf>"),
+    ("dtmf@digit", "<dtmf digit=\"{t}\"/>"),
+    ("dtmf@tone", "<dtmf tone=\"{t}\"/>"),
+]
 RE_TONE = re.compile(r"MediaResourceParticipant playing.*?url=tone:([^;\s]+);")   # one line per tone
 RE_BYE = re.compile(r"^(?:BYE|CANCEL) sip:")
 
@@ -76,13 +94,27 @@ def save():
         print(f"\nNem sikerült menteni: {e}")
 
 
+def tones_since(path, pos):
+    """Tones Bria played since byte `pos` of its log (one `MediaResourceParticipant playing` line per tone),
+    plus the BYE / CANCEL lines and the new end position."""
+    text = read_from(path, pos) if path else ""
+    tones, byes = [], []
+    for ln in text.splitlines():
+        m = RE_TONE.search(ln)
+        if m:
+            tones.append(m.group(1))
+        elif RE_BYE.match(ln.strip()):
+            byes.append(ln.strip()[:60])
+    return tones, byes, (os.path.getsize(path) if path else 0)
+
+
 def main():
     ap = argparse.ArgumentParser(description="DTMF transfer probe")
     ap.add_argument("--code", default="", help='átkapcsolási kód, pl. "#11" (alap: rákérdez)')
     ap.add_argument("--gap", type=float, default=0.25, help="szünet a jelek között, mp (alap 0.25)")
     args = ap.parse_args()
 
-    out("DTMF transfer probe v1")
+    out("DTMF transfer probe v2")
     api = BriaApi({"timeout_s": 5}, "CallCompanion/dtmf-probe")
     try:
         ws = api._open()
@@ -102,15 +134,20 @@ def main():
             ws = api._open()
             return f"ERR {e.code}", e.detail
 
-    def calls():
+    def calls(raw=False):
         code, body = req("status", "<status>\r\n <type>call</type>\r\n</status>")
         if code != 200:
             out(f"status call -> {code} {mask(body)[:160]}")
             return None
+        if raw:
+            out(f"status call nyers XML: {mask(body)[:600]}")
         return parse_calls(body) if body.strip() else []
 
     try:
-        cl = calls()
+        if input("\nFelvetted már a hívást, és megy a hang? [i/N]: ").strip().lower() not in ("i", "igen", "y"):
+            out("Előbb vedd fel a hívást (a csörgő hívásnál a jel nem megy át), aztán indítsd újra.")
+            return
+        cl = calls(raw=True)
         if cl is None:
             return
         out(f"Hívások a Briában: {len(cl)}")
@@ -124,33 +161,62 @@ def main():
         if call.held_locally:
             out("A hívás tartva van - tartásnál nem megy át a jel. Folytasd a hívást, és indítsd újra.")
             return
+        cid = xml_escape(call.call_id)
 
+        log_path = bria_log()
+        out(f"Bria napló: {log_path or 'NEM TALÁLHATÓ - a formák nem ellenőrizhetők, kilépek'}")
+        if not log_path:
+            return
+
+        # --- 1. which body form really plays a tone? (digit '1' alone is harmless: the codes start with '#')
+        out("=== 1. lépés: melyik formára szól a jel? ('1' próbajel, ártalmatlan) ===")
+        pos = os.path.getsize(log_path)
+        form = None
+        for name, tpl in FORMS:
+            rc, rb = req("dtmf", tpl.format(cid=cid, t="1"))
+            time.sleep(0.8)
+            tones, byes, pos = tones_since(log_path, pos)
+            out(f"{rc}  forma {name:<18} -> naplóban: {''.join(tones) or '-'}  {mask(rb)[:80]}")
+            if byes:
+                out(f"  a hívás közben véget ért ({byes[0]}) - kilépek")
+                return
+            if tones:
+                form = (name, tpl)
+                break
+        if not form:
+            out("EREDMÉNY: egyik formára sem játszott le jelet a Bria -> a Desktop API-val nem küldhető DTMF "
+                "(más út kell az átkapcsolás gombhoz).")
+            return
+        out(f"Működő forma: {form[0]}")
+
+        # --- 2. the transfer code with that form
         code = args.code.strip() or input("\nÁtkapcsolási kód (Enter = #11): ").strip() or "#11"
         if not re.fullmatch(r"[0-9*#]{1,12}", code):
             out(f"Érvénytelen kód: {code!r} (csak 0-9, * és #).")
             return
         if input(f"A(z) {code} elküldése ÁTKAPCSOLJA a hívást. Mehet? [i/N]: ").strip().lower() not in (
                 "i", "igen", "y"):
-            out("Megszakítva.")
+            out("Megszakítva (a próbajel eredménye fent van).")
             return
-        out(f"kód: {code}, szünet: {args.gap:g} s")
-
-        log_path = bria_log()
-        log_pos = os.path.getsize(log_path) if log_path else 0
-        out(f"Bria napló: {log_path or 'NEM TALÁLHATÓ'}")
-
-        cid = xml_escape(call.call_id)
+        out(f"=== 2. lépés: kód {code}, szünet {args.gap:g} s ===")
+        pos = os.path.getsize(log_path)
         t0 = time.monotonic()
-        for ch in code:
-            sent = False
+        for idx, ch in enumerate(code):
+            ok = False
             for tone in VARIANTS.get(ch, [ch]):
-                rc, rb = req("dtmf", f"<dtmf>\r\n <callId>{cid}</callId>\r\n <tone>{xml_escape(tone)}</tone>\r\n</dtmf>")
-                out(f"{rc}  dtmf {tone!r}  {mask(rb)[:100]}")
-                if rc == 200:
-                    sent = True
+                rc, rb = req("dtmf", form[1].format(cid=cid, t=xml_escape(tone)))
+                got = []
+                for _ in range(5):                         # Bria writes the line within a few hundred ms
+                    time.sleep(0.1)
+                    got, _, _ = tones_since(log_path, pos)
+                    if len(got) > idx:
+                        break
+                out(f"{rc}  dtmf {tone!r}  naplóban eddig: {''.join(got) or '-'}")
+                if len(got) > idx:
+                    ok = True
                     break
-            if not sent:
-                out(f"A(z) {ch!r} jelet a Bria nem fogadta el - a próba itt megáll.")
+            if not ok:
+                out(f"A(z) {ch!r} jel nem szólt meg - a próba itt megáll.")
                 break
             time.sleep(args.gap)
         t_sent = time.monotonic()
@@ -163,27 +229,17 @@ def main():
                 gone_at = time.monotonic() - t_sent
                 break
             time.sleep(0.3)
+        time.sleep(0.5)
+        tones, byes, _ = tones_since(log_path, pos)
         out(f"A hívás {'véget ért %.2f s-mal az utolsó jel után' % gone_at if gone_at is not None else 'NEM ért véget 8 mp alatt'}"
             f" (küldés összesen {t_sent - t0:.2f} s)")
-
-        if log_path:
-            time.sleep(0.5)
-            tones, byes = [], 0
-            for ln in read_from(log_path, log_pos).splitlines():
-                m = RE_TONE.search(ln)
-                if m:
-                    tones.append(m.group(1))
-                    out(f"  napló: {ln.split('| CPCAPI2')[0].strip()[:160]}")
-                elif RE_BYE.match(ln.strip()):
-                    byes += 1
-                    out(f"  napló: {ln.strip()[:60]}")
-            out(f"Bria naplójában látott jelek: {''.join(tones) or '-'}, BYE/CANCEL: {byes}")
-            if "".join(tones) == code:
-                out("EREDMÉNY: a Bria ugyanúgy küldte a jeleket, mint a billentyűzetről"
-                    + (" és a hívás véget ért -> az API-s átkapcsolás MŰKÖDIK." if gone_at is not None else
-                       ", de a hívás nem ért véget -> kérdés a központnak (időzítés?)."))
-            else:
-                out("EREDMÉNY: a naplóban nem ugyanazok a jelek jelentek meg, mint a kód.")
+        out(f"Bria naplójában látott jelek: {''.join(tones) or '-'}, BYE/CANCEL: {len(byes)}")
+        if "".join(tones) == code and gone_at is not None:
+            out(f"EREDMÉNY: az API-s átkapcsolás MŰKÖDIK (forma: {form[0]}).")
+        elif "".join(tones) == code:
+            out("EREDMÉNY: a jelek elmentek, de a hívás nem ért véget -> kérdés a központnak (időzítés?).")
+        else:
+            out("EREDMÉNY: a naplóban nem ugyanazok a jelek jelentek meg, mint a kód.")
         out("Kérlek, írd meg azt is: csörgött-e a célmelléken, és mit hallott a hívó.")
     finally:
         try:
