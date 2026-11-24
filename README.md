@@ -938,7 +938,8 @@ callcompanion/
   config.py  config.json  version.py  requirements.txt
   extension/            manifest.json  background.js  content.js
   assets/               app.ico  logo.svg  whatsnew.md (Újdonságok text, 1.1.0)
-  tools/                placement_probe.py  bria_transfer_probe.py  bria_capabilities_probe.py  make_license.py  (not shipped)
+  tools/                placement_probe.py  bria_transfer_probe.py  bria_capabilities_probe.py  dtmf_transfer_probe.py
+                        make_license.py  (not shipped)
   build.ps1  callcompanion.spec  installer.iss
   README.md  CHANGELOG.md  .gitignore
 ```
