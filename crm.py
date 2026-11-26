@@ -41,6 +41,7 @@ Optional config.json keys (minicrm): "system_id" (default 60171), "batch_url" (f
 called BusinessRelated / Company / Business / ...).
 """
 import html as htmllib
+import http.cookiejar
 import logging
 import math
 import re
@@ -150,6 +151,27 @@ def _plausible_name(s: str) -> bool:
         and not any(ch.isdigit() for ch in s) and "@" not in s
 
 
+class _ChromeOwnsCookies(http.cookiejar.DefaultCookiePolicy):
+    """1.1.0-beta.3: while the session comes from the Chrome extension, the server must not change our cookie jar.
+    A 403 answer carries a fresh, NOT logged-in `Session` cookie; requests stored it over Chrome's good one, and as
+    Chrome's cookie did not change (changed=False) the app kept sending the useless one for hours (2026-11-24/26).
+    Chrome is the only source: Set-Cookie of a response is ignored (and logged by name, never value)."""
+
+    def __init__(self):
+        super().__init__()
+        self.enabled = False
+        self.blocked: set[str] = set()     # names refused since the last extension push (log each name once)
+
+    def set_ok(self, cookie, request):
+        if not self.enabled:
+            return super().set_ok(cookie, request)
+        if cookie.name not in self.blocked:
+            self.blocked.add(cookie.name)
+            log.info("server tried to set cookie %s@%s -> ignored (Chrome's cookies are used)",
+                     cookie.name, cookie.domain)
+        return False
+
+
 class MiniCrmClient:
     FOUND_TTL_S = 12 * 3600     # a resolved name rarely changes
     COMPANY_TTL_S = 12 * 3600   # same for a company; "no company" is re-checked after NOT_FOUND_TTL_S
@@ -163,9 +185,12 @@ class MiniCrmClient:
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"
         )
+        self._cookie_policy = _ChromeOwnsCookies()     # 1.1.0-beta.3: enabled by the first extension push
+        self.http.cookies.set_policy(self._cookie_policy)
         self._lock = threading.Lock()
         self._sig = None
         self.has_session = False
+        self._auth_cookie = False       # 1.1.0-beta.3: the push contained the login cookie (session_cookie_name)
         self._cache: dict[str, tuple[float, CallerInfo]] = {}   # number -> (expires at, result)
         self._company_cache: dict[str, tuple[float, str]] = {}  # contact id -> (expires at, company or "")
         self._company_fields_logged = False                     # 1.0.0: "-> none fields=" logged once
@@ -175,13 +200,25 @@ class MiniCrmClient:
         self._warm_ok_at = 0.0          # time.monotonic() of the last successful warm-up ping
 
     # ---- session sources -----------------------------------------------------------------
+    @staticmethod
+    def _cookie_sig(items) -> int:
+        return hash(tuple(sorted((n, v, d or "") for n, v, d in items)))
+
+    def _jar_sig(self) -> int:
+        return self._cookie_sig((c.name, c.value, c.domain) for c in self.http.cookies)
+
     def set_extension_session(self, cookies: list, user_agent: str = "") -> bool:
         """Replace the cookie jar with the cookies pushed by the Chrome extension.
-        Returns True when the cookie set changed since the last push."""
-        sig = hash(tuple(sorted((c["name"], c["value"], c.get("domain", "")) for c in cookies)))
+        Returns True when the cookie set changed since the last push.
+        1.1.0-beta.3: the jar is also rebuilt when it drifted from Chrome's cookies (it must never differ)."""
+        sig = self._cookie_sig((c["name"], c["value"], c.get("domain", "")) for c in cookies)
         with self._lock:
+            self._cookie_policy.enabled = True
             changed = sig != self._sig
-            if changed:
+            drifted = not changed and self._jar_sig() != sig
+            if drifted:
+                log.info("jar drift: our cookies differ from Chrome's -> restored (%s)", self._jar_summary())
+            if changed or drifted:
                 self.http.cookies.clear()
                 for c in cookies:
                     self.http.cookies.set(
@@ -191,11 +228,19 @@ class MiniCrmClient:
                         secure=bool(c.get("secure")),
                     )
                 self._sig = sig
+                self._cookie_policy.blocked.clear()
                 log.info("session cookies: %s", self._jar_summary())    # names + domains only, never values
             if user_agent:
                 self.http.headers["User-Agent"] = user_agent
             self.has_session = bool(cookies)
+            name = str(self.cfg.get("session_cookie_name") or "Session")
+            self._auth_cookie = any(c["name"] == name for c in cookies)
         return changed
+
+    @property
+    def has_login_cookie(self) -> bool:
+        """1.1.0-beta.3: Chrome sent the login cookie (so a 403 means 'not active yet / stuck', not 'logged out')."""
+        return self._auth_cookie
 
     def load_cookies(self) -> str:
         """cookie_source = manual | browser. Raises RuntimeError."""

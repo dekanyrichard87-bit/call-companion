@@ -3,6 +3,34 @@
 All notable changes to Call Companion. Format based on [Keep a Changelog](https://keepachangelog.com);
 versions follow [Semantic Versioning](https://semver.org) with a pre-release label.
 
+## [1.1.0-beta.3] - 2026-11-26
+
+Fix for the MiniCRM "Jelentkezzen be" error while Chrome was logged in (seen 2026-11-24 on the 101, 2026-11-25 on the
+101 and 2026-11-26 on the 104; most likely also the unexplained 403 of 2026-11-17). Plan approved 2026-11-26.
+
+### Fixed
+- **The app no longer replaces Chrome's MiniCRM cookies with the server's** (`crm.py`, `_ChromeOwnsCookies`): a 403
+  answer carries a fresh, NOT logged-in `Session` cookie (`set-cookie=Session` in the `denied:` line). `requests`
+  stored it over Chrome's good cookie, and as Chrome's cookie did not change (`changed=False`) the jar was never
+  rebuilt: every check and lookup sent the useless cookie for hours, until a new login in Chrome changed the cookie.
+  Typical trigger: Chrome starts, the first push has only `UserCode`, the check gets 403 + a new `Session`, which then
+  overwrites the real one that arrives a moment later (a race, 2026-11-26 07:56:13). Now, while the session comes
+  from the extension, Set-Cookie of a response is ignored (log: `server tried to set cookie Session@... -> ignored`),
+  and every push also rebuilds the jar when it differs from Chrome's cookies (log: `jar drift: ... -> restored`).
+  Reproduced and verified with a local test server (old code: 2nd request sends the server's cookie; new: Chrome's).
+- **"Szinkron most" in the extension popup re-checks the session** (`main.py`): a `user` push only re-checked when
+  the cookies changed, so pressing it did nothing visible (8 presses in a row on 2026-11-25).
+
+### Added
+- **Quick session re-checks** (`main.py`, `_schedule_session_retry`): while MiniCRM refuses a session, the check runs
+  again after 5, 10, 20, 40 s, then every minute (one small search each) instead of only at the 5-minute heartbeat.
+  A fresh login is refused for a short time (UNVERIFIED how long; under 47 s on 2026-11-26), so the state turns
+  green about half a minute after logging in. Log: `session re-check #N in S s`, `session re-check series ended`.
+- **New state `MINICRM-INACTIVE`** (`status_window.py`, `main.py`): Chrome holds the login cookie (`Session`, config
+  `minicrm.session_cookie_name`) but MiniCRM refuses it -> *A MiniCRM munkamenet még nem aktív* (the app retries; if
+  it is still red after a few minutes: log out of MiniCRM and in again). The login notice on the card is shown for
+  this state only after ~75 s. Without the cookie it stays *Jelentkezzen be a MiniCRM-be* (`MINICRM-LOGIN`).
+
 ## [1.1.0-beta.2] - 2026-11-19
 
 ### Changed

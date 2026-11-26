@@ -170,6 +170,7 @@ simulator, live `app.log` view and "clear history"; the tray menu gets test call
 |---|---|---|
 | `BRIA-LOG` | A Bria hívásai most nem láthatók | Is Bria running (Log Level Verbose)? Restart Call Companion |
 | `MINICRM-LOGIN` | Jelentkezzen be a MiniCRM-be | Log in to MiniCRM in Chrome; calls still pop up, without names |
+| `MINICRM-INACTIVE` | A MiniCRM munkamenet még nem aktív | Chrome is logged in but MiniCRM refuses the session; the app re-checks after 5/10/20/40 s, then every minute. Still red after a few minutes: log out of MiniCRM and in again (1.1.0-beta.3) |
 | `EXT-OFFLINE` | Nincs kapcsolat a Chrome-mal | Open Chrome with MiniCRM; check that the extension is on |
 | `EXT-OLD` | Frissítse a Chrome bővítményt | The app shipped a newer extension: `chrome://extensions` > Call Companion > ↻ (1.0.0) |
 | `MINICRM-NET` | A MiniCRM most nem érhető el | Internet connection |
@@ -801,6 +802,8 @@ Everything is logged to `%LOCALAPPDATA%\CallCompanion\app.log` (cookies and resp
 | `session state: False` / "MiniCRM login needed" card | The MiniCRM session expired: log in again in Chrome. Since 1.0.0-rc.2 the check runs the same search as a call, after every lookup that hit an expired session and at every extension heartbeat (5 min) |
 | `lookup for call <id> hit an expired session -> session re-check` | A call's lookup got 401/403; the session is checked at once, the call is looked up again when the session is valid (`relookup (session back) ...`) |
 | `session check denied:` / `lookup N/3 denied: HTTP 403 url=... server=... waf=... set-cookie=...; jar: ...` | Who refused the request (a `waf` entry = a firewall in front of MiniCRM) and the cookie names sent (no values) |
+| `server tried to set cookie Session@... -> ignored` / `jar drift: ... -> restored` | (1.1.0-beta.3) MiniCRM sent a cookie in an answer; it is ignored, Chrome's cookies are always used |
+| `session re-check #N in S s` / `session re-check series ended` | (1.1.0-beta.3) quick re-checks while MiniCRM refuses the session |
 | `session cookies: NAME@domain, ... (DUPLICATE: NAME)` | The extension's cookie set changed; `DUPLICATE` = the same cookie name on two domains, the server may get the old one |
 | `relookup (row) for call <id> ...1234` | *Újrakeresés a MiniCRM-ben* from the history's right-click menu |
 | `session state: None no cookies` | No extension push yet: Chrome closed or extension not loaded |
@@ -904,8 +907,9 @@ and one-click transfer through the Bria Desktop API, extension list.
   settings and packages.
 - **1.0.0** (released 2026-11-17): the Chrome extension comes from the Chrome Web Store (published 2026-11-17,
   unlisted) and the app accepts only that one; the extension list and history format are frozen.
-- **1.1.0** (this release, beta.2): withheld numbers, folding missed cards, caller reached, history day bands,
-  Visszajelzés, Újdonságok, CANCEL diagnostics, licence preparation.
+- **1.1.0** (this release, beta.3): withheld numbers, folding missed cards, caller reached, history day bands,
+  Visszajelzés, Újdonságok, CANCEL diagnostics, licence preparation; beta.3: MiniCRM session fix (Chrome's cookies
+  are never replaced by the server's), quick session re-checks, `MINICRM-INACTIVE`.
 - **Later milestone: mobile app** (idea, 2026-11-19): Android could show a caller card for calls on the phone; the open
   question is MiniCRM access without the Chrome extension (the PC app as a relay, or an API key). iOS allows no
   in-call card. Not started.

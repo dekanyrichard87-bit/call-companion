@@ -105,6 +105,7 @@ class StatusModel(QObject):
     def __init__(self, store=None) -> None:
         super().__init__()
         self.minicrm = HealthItem()
+        self.minicrm_inactive = False   # 1.1.0-beta.3: login cookie present but refused (MINICRM-INACTIVE)
         self.bria = HealthItem()
         self.extension = HealthItem()
         self.api = HealthItem()
@@ -127,7 +128,11 @@ class StatusModel(QObject):
             setattr(self, attr, new)
             self.changed.emit()
 
-    def set_minicrm(self, state: Health, text: str) -> None:
+    def set_minicrm(self, state: Health, text: str, inactive: bool = False) -> None:
+        """inactive (1.1.0-beta.3): Chrome holds the login cookie but MiniCRM refuses it (fresh or stuck session)."""
+        if inactive != self.minicrm_inactive:
+            self.minicrm_inactive = inactive
+            self.changed.emit()
         self._set_health("minicrm", state, text)
 
     def set_bria(self, state: Health, text: str) -> None:
@@ -167,6 +172,10 @@ class StatusModel(QObject):
                            "A Bria hívásai most nem láthatók",
                            "Ellenőrizze, hogy fut-e a Bria. Ha fut, lépjen ki a Call Companionből és indítsa újra.",
                            "BRIA-LOG")
+        if m is Health.ERROR and self.minicrm_inactive:
+            return Summary(Health.ERROR, "A MiniCRM munkamenet még nem aktív",
+                           "A Call Companion fél percen belül újra megpróbálja. Ha pár perc múlva sem lesz zöld, "
+                           "jelentkezzen ki a MiniCRM-ből, majd lépjen be újra.", "MINICRM-INACTIVE")
         if m is Health.ERROR:
             return Summary(Health.ERROR, "Jelentkezzen be a MiniCRM-be",
                            "Nyissa meg a Chrome-ot és lépjen be a MiniCRM-be. Addig a hívások név nélkül "

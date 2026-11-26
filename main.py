@@ -124,6 +124,12 @@ class Controller(QObject):
         self.health_timer = QTimer(self)
         self.health_timer.setInterval(10_000)
         self.health_timer.timeout.connect(self.refresh_health)
+        # 1.1.0-beta.3: while MiniCRM refuses a session Chrome holds, re-check soon (a fresh login needs a few
+        # seconds before the search accepts it), not only at the 5-minute heartbeat.
+        self.session_retry = QTimer(self)
+        self.session_retry.setSingleShot(True)
+        self.session_retry.timeout.connect(self.check_session)
+        self._retry_step = 0
         self.event_sig.connect(self.on_event)
         self.lookup_sig.connect(self.on_lookup)
         self.session_sig.connect(self.on_session)
@@ -204,7 +210,9 @@ class Controller(QObject):
                     # extension not seen yet -> unknown (still waiting)
                     self.session_sig.emit(False if self.ext_seen else None, "no cookies")
                     return
-                self.session_sig.emit(self.client.session_ok(), "")
+                ok = self.client.session_ok()
+                # 1.1.0-beta.3: refused although Chrome holds the login cookie = "not active (yet)", not "logged out"
+                self.session_sig.emit(ok, "inactive" if ok is False and self.client.has_login_cookie else "")
             except Exception as e:
                 log.warning("session problem: %s", e)
                 self.session_sig.emit(False, str(e))
@@ -232,7 +240,10 @@ class Controller(QObject):
                  len(cookies), changed)
         # v1.0.0-rc.2: the 5-minute heartbeat re-checks too (one small search), so an expired session shows up
         # before the next call - also when the cookies did not change (the server ended the session).
-        if changed or self.session_state is None or payload.get("reason") == "heartbeat":
+        # 1.1.0-beta.3: the popup's "Szinkron most" (reason "user") re-checks too (before it did nothing visible).
+        if changed:
+            self._retry_step = 0         # new cookies: start the quick re-check series again
+        if changed or self.session_state is None or payload.get("reason") in ("heartbeat", "user"):
             self.check_session()
 
     def ext_status(self) -> dict:
@@ -257,6 +268,9 @@ class Controller(QObject):
         elif ok is True:
             self.status.set_minicrm(Health.OK, "Bejelentkezve, a munkamenet érvényes")
             self.client.kick_warmup()
+        elif ok is False and msg == "inactive":
+            self.status.set_minicrm(Health.ERROR, "A munkamenet még nem aktív (a MiniCRM elutasította)",
+                                    inactive=True)
         elif ok is False:
             self.status.set_minicrm(Health.ERROR, "Jelentkezzen be a MiniCRM-be a Chrome-ban"
                                     + (f" ({msg})" if msg else ""))
@@ -264,13 +278,39 @@ class Controller(QObject):
             self.status.set_minicrm(Health.WARN, "A munkamenet nem ellenőrizhető (hálózat?)")
         else:
             self.status.set_minicrm(Health.WARN, "Várakozás a Chrome bővítményre")
+        self._schedule_session_retry(ok, msg)
         if ok is True and prev is not True and self._expired_ids:
             self._relookup_expired()
-        if ok is False and prev is not False:
+        if ok is False and prev is not False and msg != "inactive":   # inactive: notice only if it lasts (below)
             self._show_notice("Jelentkezzen be a MiniCRM-be",
                               "Nyissa meg a Chrome-ot és lépjen be a MiniCRM-be, hogy a hívók neve megjelenjen.")
         # Tell the status window a session check has completed (drives the re-check button feedback).
         self.status.recheck_finished.emit()
+
+    RETRY_STEPS_S = (5, 10, 20, 40)     # then every RETRY_STEADY_S while MiniCRM keeps refusing
+    RETRY_STEADY_S = 60
+
+    def _schedule_session_retry(self, ok, msg: str):
+        """1.1.0-beta.3: quick re-checks while a session Chrome holds is refused (5, 10, 20, 40 s, then every
+        minute). Nothing is scheduled when there are no cookies at all (only a login in Chrome helps then)."""
+        if ok is True or self.mock or msg == "no cookies" or not self.client.has_session:
+            if self._retry_step:
+                log.info("session re-check series ended (state %s)", ok)
+            self._retry_step = 0
+            self.session_retry.stop()
+            return
+        if ok is None and not self._retry_step:
+            return                       # network trouble: the heartbeat checks again, as before
+        if self.session_retry.isActive():
+            return
+        steps = self.RETRY_STEPS_S
+        delay = steps[self._retry_step] if self._retry_step < len(steps) else self.RETRY_STEADY_S
+        if self._retry_step == len(steps) and msg == "inactive":     # still refused after ~75 s
+            self._show_notice("A MiniCRM munkamenet nem aktív",
+                              "Jelentkezzen ki a MiniCRM-ből a Chrome-ban, majd lépjen be újra.")
+        self._retry_step += 1
+        log.info("session re-check #%d in %d s", self._retry_step, delay)
+        self.session_retry.start(delay * 1000)
 
     def _watchdog(self):
         if not self.ext_seen:

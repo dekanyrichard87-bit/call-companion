@@ -12,3 +12,5 @@ egy `## X.Y.Z` szakasz, alatta `- ` kezdetű pontok. A technikai részletek a CH
 - **Áttekinthetőbb hívásnapló:** erősebb napfejlécek dátummal, és egy „Mind összecsuk / Mind kinyit” gomb. Összecsukva csak a napok látszanak a hívások számával.
 - **Visszajelzés gomb** a főablakban (szövegbuborék ikon): hibát vagy ötletet egy kattintással elküldhetsz a készítőnek.
 - **Újdonságok ablak:** frissítés után ez az ablak mutatja, mi változott. Később a tálcaikon menüjéből is elérhető.
+- **Javítva: „Jelentkezzen be a MiniCRM-be”, pedig be voltál lépve.** Reggelente előfordult, hogy a program órákig nem talált neveket, és csak a MiniCRM-ből való ki- és bejelentkezés segített. Ezt a hibát megtaláltuk és kijavítottuk.
+- **Gyorsabban zöld belépés után:** a MiniCRM egy friss belépést pár másodpercig még nem fogad el. A program ilyenkor fél percen belül magától újra próbálja. A bővítmény „Szinkron most” gombja is azonnal újraellenőriz.
